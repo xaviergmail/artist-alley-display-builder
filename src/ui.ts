@@ -17,12 +17,10 @@ export interface UICallbacks {
   onDumpState(): Promise<boolean>;
 }
 
-const TRASH_SVG =
-  '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zM6 9h12l-1.2 12H7.2L6 9z"/></svg>';
-const BUG_SVG =
-  '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M19.1 13.5 22 12l-2.9-1.5.4-2.1-2.2.3L16 6.8l.6-2.5-2.2 1.2L12 3l-2.4 2.5-2.2-1.2.6 2.5-1.3 1.9-2.2-.3.4 2.1L2 12l2.9 1.5-.4 2.1 2.2-.3L8 17.2l-.6 2.5 2.2-1.2L12 21l2.4-2.5 2.2 1.2-.6-2.5 1.3-1.9 2.2.3-.4-2.1ZM12 17a5 5 0 1 1 0-10 5 5 0 0 0-4 0Z"/></svg>';
-const CLOSE_SVG =
-  '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="m6.7 5.3 12 12-1.4 1.4-12-12zM18.7 6.7l-12 12-1.4-1.4 1.4-1.4 12-12z"/></svg>';
+const TRASH_ICON = '<i class="fa-solid fa-trash" aria-hidden="true"></i>';
+const BUG_ICON = '<i class="fa-solid fa-bug" aria-hidden="true"></i>';
+const CLOSE_ICON = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+const ICON = (name: string) => `<i class="fa-solid fa-${name}" aria-hidden="true"></i>`;
 
 const TABLE_OPTIONS: Array<[number, string]> = [[36, '3 ft'], [48, '4 ft'], [72, '6 ft'], [96, '8 ft']];
 const PALETTE = [
@@ -66,7 +64,7 @@ export class UI {
 
     this.addBtn = document.createElement('button');
     this.addBtn.className = 'add-btn';
-    this.addBtn.textContent = '+ Add color';
+    this.addBtn.innerHTML = `${ICON('plus')}<span>Add color</span>`;
     this.addBtn.setAttribute('aria-haspopup', 'dialog');
     this.addBtn.addEventListener('click', () => this.openColorPicker({ kind: 'new' }, '#e74c3c', 'Add colored panel'));
     sidebar.appendChild(this.addBtn);
@@ -96,15 +94,15 @@ export class UI {
     const actions = document.createElement('div');
     actions.className = 'assembly-actions';
     actions.append(
-      this.makeActionButton('Save', 'Save this assembly in this browser', () => {
+      this.makeActionButton('Save', 'floppy-disk', 'Save this assembly in this browser', () => {
         const saved = this.cbs.onSave();
         this.showStatus(saved ? 'Saved in this browser' : 'Could not save assembly', saved ? 'success' : 'error');
       }),
-      this.makeActionButton('Load', 'Load the browser-saved assembly', () => {
+      this.makeActionButton('Load', 'folder-open', 'Load the browser-saved assembly', () => {
         const loaded = this.cbs.onLoad();
         this.showStatus(loaded ? 'Saved assembly restored' : 'No saved assembly found', loaded ? 'success' : 'error');
       }),
-      this.makeActionButton('Share', 'Copy a shareable assembly URL', async () => {
+      this.makeActionButton('Share', 'share-nodes', 'Copy a shareable assembly URL', async () => {
         const shared = await this.cbs.onShare();
         this.showStatus(shared ? 'Share URL copied' : 'Could not copy share URL', shared ? 'success' : 'error');
       }),
@@ -114,7 +112,8 @@ export class UI {
     github.href = GITHUB_URL;
     github.target = '_blank';
     github.rel = 'noreferrer';
-    github.textContent = 'GitHub';
+    github.innerHTML = '<i class="fa-brands fa-github" aria-hidden="true"></i>';
+    github.setAttribute('aria-label', 'Open the project on GitHub');
     github.title = 'Open the project on GitHub';
     actions.appendChild(github);
     footer.appendChild(actions);
@@ -124,7 +123,7 @@ export class UI {
     this.dumpBtn.type = 'button';
     this.dumpBtn.title = 'Copy assembly JSON';
     this.dumpBtn.setAttribute('aria-label', 'Copy assembly JSON');
-    this.dumpBtn.innerHTML = BUG_SVG;
+    this.dumpBtn.innerHTML = BUG_ICON;
     this.dumpBtn.addEventListener('click', async () => this.setDumpStatus(await this.cbs.onDumpState()));
     footer.appendChild(this.dumpBtn);
     sidebar.appendChild(footer);
@@ -140,7 +139,7 @@ export class UI {
     const help = document.createElement('button');
     help.className = 'help-btn';
     help.type = 'button';
-    help.textContent = '?';
+    help.innerHTML = '<i class="fa-regular fa-circle-question" aria-hidden="true"></i>';
     help.title = 'Show builder tutorial';
     help.setAttribute('aria-label', 'Show builder tutorial');
     help.addEventListener('click', () => this.tutorialDialog.showModal());
@@ -165,11 +164,12 @@ export class UI {
     viewport.appendChild(this.countBar);
   }
 
-  private makeActionButton(label: string, title: string, action: () => void | Promise<void>): HTMLButtonElement {
+  private makeActionButton(label: string, icon: string, title: string, action: () => void | Promise<void>): HTMLButtonElement {
     const button = document.createElement('button');
     button.className = 'sidebar-action';
     button.type = 'button';
-    button.textContent = label;
+    button.innerHTML = ICON(icon);
+    button.setAttribute('aria-label', label);
     button.title = title;
     button.addEventListener('click', () => { void action(); });
     return button;
@@ -179,8 +179,9 @@ export class UI {
     const button = document.createElement('button');
     button.className = 'material-color-btn';
     button.type = 'button';
-    button.textContent = label;
+    button.innerHTML = `${ICON(target === 'metal' ? 'screwdriver-wrench' : 'puzzle-piece')}<span>${label}</span>`;
     button.title = `Change global ${label.toLowerCase()} color`;
+    button.setAttribute('aria-label', `Change global ${label.toLowerCase()} color`);
     button.addEventListener('click', () => this.openColorPicker({ kind: 'material', target }, button.style.getPropertyValue('--swatch') || '#2f3945', `Change ${label.toLowerCase()} color`));
     this.materialButtons.set(target, button);
     return button;
@@ -196,7 +197,7 @@ export class UI {
     close.type = 'button';
     close.title = 'Close color picker';
     close.setAttribute('aria-label', 'Close color picker');
-    close.innerHTML = CLOSE_SVG;
+    close.innerHTML = CLOSE_ICON;
     close.addEventListener('click', () => dialog.close());
     header.append(title, close);
 
@@ -252,7 +253,7 @@ export class UI {
     close.type = 'button';
     close.title = 'Close tutorial';
     close.setAttribute('aria-label', 'Close tutorial');
-    close.innerHTML = CLOSE_SVG;
+    close.innerHTML = CLOSE_ICON;
     close.addEventListener('click', () => dialog.close());
     header.append(title, close);
     const steps = [
@@ -302,7 +303,7 @@ export class UI {
   private makeOverlayTrash(viewport: HTMLElement, onClick: () => void): HTMLButtonElement {
     const btn = document.createElement('button');
     btn.className = 'overlay-btn';
-    btn.innerHTML = TRASH_SVG;
+    btn.innerHTML = TRASH_ICON;
     btn.addEventListener('click', onClick);
     viewport.appendChild(btn);
     return btn;
@@ -352,8 +353,9 @@ export class UI {
       const trash = document.createElement('button');
       trash.className = 'icon-trash';
       trash.type = 'button';
-      trash.innerHTML = TRASH_SVG;
+      trash.innerHTML = TRASH_ICON;
       trash.title = 'Remove custom panel type';
+      trash.setAttribute('aria-label', `Remove ${type.id} panel type`);
       trash.addEventListener('click', () => this.openReplacementDialog(type));
       entry.appendChild(trash);
     }
@@ -398,7 +400,7 @@ export class UI {
 
   setQuickMode(enabled: boolean, notify = true): void {
     this.quickBtn.setAttribute('aria-pressed', String(enabled));
-    this.quickBtn.textContent = `Quick build: ${enabled ? 'On' : 'Off'}`;
+    this.quickBtn.innerHTML = `${ICON('bolt')}<span>Quick build: ${enabled ? 'On' : 'Off'}</span>`;
     this.quickBtn.classList.toggle('active', enabled);
     if (notify) this.cbs.onQuickModeChange(enabled);
   }
@@ -434,7 +436,7 @@ export class UI {
     const connectors = document.createElement('span');
     connectors.className = 'count-item connector-count';
     connectors.title = `Connectors: ${connectorCount}`;
-    connectors.innerHTML = `<span class="connector-count-icon">✣</span><strong>${connectorCount}</strong>`;
+    connectors.innerHTML = `<i class="connector-count-icon fa-solid fa-puzzle-piece" aria-hidden="true"></i><strong>${connectorCount}</strong>`;
     this.countBar.append(divider, connectors);
     this.countBar.setAttribute('aria-label', `${counts.map((type) => `${type.id}: ${type.count}`).join(', ')}; connectors: ${connectorCount}`);
   }

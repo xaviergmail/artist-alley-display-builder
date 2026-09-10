@@ -115,14 +115,23 @@ html, body, #app {
 }
 
 .add-btn {
+  display: grid;
   width: 64px;
   height: 40px;
+  place-items: center;
+  gap: 1px;
   border: 1px dashed #9aa3ad;
   border-radius: 8px;
   background: #fff;
   color: #556;
   font-size: 11px;
   cursor: pointer;
+}
+
+.add-btn .fa-solid,
+.quick-mode-btn .fa-solid,
+.material-color-btn .fa-solid {
+  font-size: 13px;
 }
 
 
@@ -432,8 +441,11 @@ html, body, #app {
 
 .quick-mode-btn,
 .material-color-btn {
+  display: grid;
   width: 64px;
   min-height: 34px;
+  place-items: center;
+  gap: 2px;
   border: 1px solid #c3c9d1;
   border-radius: 8px;
   background: #fff;
@@ -482,7 +494,7 @@ html, body, #app {
   background: #fff;
   color: #475569;
   cursor: pointer;
-  font: 600 10px system-ui, sans-serif;
+  font-size: 15px;
   text-decoration: none;
 }
 
@@ -534,7 +546,7 @@ html, body, #app {
   box-shadow: 0 3px 12px rgba(15, 23, 42, 0.22);
   color: #fff;
   cursor: pointer;
-  font: 700 26px/1 system-ui, sans-serif;
+  font-size: 25px;
   z-index: 10;
 }
 
