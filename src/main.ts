@@ -299,9 +299,15 @@ function renderFrame(): void {
 }
 sceneCtx.controls.addEventListener('change', renderFrame);
 
-
-// Swap procedural fallback panels for the Blender models once loaded.
-loadPanelAssets().then(refresh);
+// Swap procedural fallback panels for the Blender models once loaded, and
+// align the default sidebar swatches with the actual model materials.
+loadPanelAssets().then((colors) => {
+  if (!colors) return;
+  for (const [id, t] of world.types) {
+    if (!t.custom && colors[t.kind]) world.types.set(id, { ...t, color: colors[t.kind] });
+  }
+  refresh();
+});
 refresh();
 
 

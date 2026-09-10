@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import panelsUrl from '../assets/Panels.glb?url';
 import {
   STEP,
@@ -20,30 +21,46 @@ export interface GhostSpec {
 
 // Blender-exported panel models (assets/Panels.glb), one per panel kind.
 // Geometries are normalized at load: rotated so thickness runs along local z,
-// centered on the origin, and scaled to the 12-inch lattice step.
 interface PanelAsset {
   geometry: THREE.BufferGeometry;
-  material: THREE.Material;
+  materials: THREE.Material[];
 }
 let panelAssets: Record<'grid' | 'outline' | 'plain', PanelAsset> | null = null;
 
-export function loadPanelAssets(): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
+// Resolves with each kind's primary material hex color (for sidebar swatches),
+// or null if the model could not be loaded.
+export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', string> | null> {
+  const { promise, resolve } = Promise.withResolvers<Record<'grid' | 'outline' | 'plain', string> | null>();
   const fail = (err: unknown) => {
     console.error('failed to load Panels.glb, falling back to procedural panels', String(err));
-    resolve();
+    resolve(null);
   };
   new GLTFLoader().load(
     panelsUrl,
     (gltf) => {
       try {
         const out = {} as Record<'grid' | 'outline' | 'plain', PanelAsset>;
+        const colors = {} as Record<'grid' | 'outline' | 'plain', string>;
         for (const kind of ['grid', 'outline', 'plain'] as const) {
           // glTF node names are capitalized; app kind ids are lowercase.
           const node = gltf.scene.getObjectByName(kind[0].toUpperCase() + kind.slice(1));
           if (!node) throw new Error(`Panels.glb: missing mesh "${kind}"`);
-          const mesh = node as THREE.Mesh;
-          const geo = mesh.geometry.clone();
+          node.updateMatrixWorld(true);
+          const rootInv = new THREE.Matrix4().copy(node.matrixWorld).invert();
+          // Variant detail lives in child meshes (grid wires, plain bars):
+          // merge the whole subtree, keeping per-mesh materials as groups.
+          const geos: THREE.BufferGeometry[] = [];
+          const mats: THREE.Material[] = [];
+          node.traverse((o) => {
+            const m = o as THREE.Mesh;
+            if (!m.isMesh) return;
+            const g = m.geometry.clone();
+            g.applyMatrix4(new THREE.Matrix4().copy(m.matrixWorld).premultiply(rootInv));
+            geos.push(g);
+            mats.push(Array.isArray(m.material) ? m.material[0] : m.material);
+          });
+          const geo = mergeGeometries(geos, true);
+          if (!geo) throw new Error(`Panels.glb: could not merge meshes for "${kind}"`);
           geo.rotateX(Math.PI / 2); // model thickness along Y -> app-canonical Z
           geo.computeBoundingBox();
           const bb = geo.boundingBox!;
@@ -54,11 +71,11 @@ export function loadPanelAssets(): Promise<void> {
           const scale = STEP / Math.max(size.x, size.z);
           geo.translate(-center.x, -center.y, -center.z);
           geo.scale(scale, scale, scale);
-          const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
-          out[kind] = { geometry: geo, material: mat };
+          out[kind] = { geometry: geo, materials: mats };
+          colors[kind] = '#' + (mats[0] as THREE.MeshStandardMaterial).color.getHexString();
         }
         panelAssets = out;
-        resolve();
+        resolve(colors);
       } catch (err) {
         fail(err);
       }
@@ -68,7 +85,6 @@ export function loadPanelAssets(): Promise<void> {
   );
   return promise;
 }
-
 const THICK = 0.5;
 const GHOST = 0x3b82f6;
 const TABLE_DEPTH = 24;
@@ -108,9 +124,11 @@ function buildPanelContent(type: PanelType, ghost: boolean): THREE.Group {
   } else {
     const asset = panelAssets?.[type.kind];
     if (asset) {
-      const mat = (asset.material as THREE.MeshStandardMaterial).clone();
-      if (type.kind === 'plain') mat.color.set(type.color); // custom colors override the Blender base
-      g.add(new THREE.Mesh(asset.geometry.clone(), mat));
+      // Default types keep their Blender materials verbatim; custom plain
+      // types recolor every material group with the picked color.
+      const mats = asset.materials.map((m) => (m as THREE.MeshStandardMaterial).clone());
+      if (type.custom && type.kind === 'plain') for (const m of mats) m.color.set(type.color);
+      g.add(new THREE.Mesh(asset.geometry.clone(), mats));
     } else {
       // Fallback while the model loads (or if it failed): procedural boxes.
       g.add(new THREE.Mesh(
