@@ -76,6 +76,7 @@ let ghostPlacement: Placement | null = null;
 let ghostInvalid = false;
 let camDragging = false;
 let downPos: { x: number; y: number } | null = null;
+let rightDown: { panelKey: string | null; x: number; y: number } | null = null;
 let lastMouse: { x: number; y: number } = { x: 0, y: 0 };
 
 const EDGE_ACTIVATE_PX = 45; // start showing the ghost this close to an edge
@@ -415,7 +416,14 @@ const ui = new UI(sidebar, viewport, {
 // ---------------------------------------------------------------- events
 
 canvas.addEventListener('pointerdown', (e) => {
-  if (e.button === 1 || e.button === 2) {
+  if (e.button === 2) {
+    setNdc(e.clientX, e.clientY);
+    raycaster.setFromCamera(ndc, sceneCtx.camera);
+    rightDown = { panelKey: pick().panelKeyHit, x: e.clientX, y: e.clientY };
+    camDragging = true;
+    clearHover();
+    canvas.style.cursor = 'move';
+  } else if (e.button === 1) {
     camDragging = true;
     clearHover();
     canvas.style.cursor = 'move';
@@ -431,7 +439,24 @@ canvas.addEventListener('pointermove', (e) => {
 });
 
 canvas.addEventListener('pointerup', (e) => {
-  if (e.button === 1 || e.button === 2) {
+  if (e.button === 2) {
+    const panelKeyHit = rightDown
+      && Math.hypot(e.clientX - rightDown.x, e.clientY - rightDown.y) < 5
+      ? rightDown.panelKey
+      : null;
+    rightDown = null;
+    camDragging = false;
+    canvas.style.cursor = 'default';
+    if (panelKeyHit) {
+      world.removePanel(panelKeyHit);
+      clearHover();
+      refresh();
+    } else {
+      updateHover(e.clientX, e.clientY);
+    }
+    return;
+  }
+  if (e.button === 1) {
     camDragging = false;
     canvas.style.cursor = 'default';
     updateHover(e.clientX, e.clientY);
@@ -443,6 +468,8 @@ canvas.addEventListener('pointerup', (e) => {
     if (moved < 5) handleClick();
   }
 });
+
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // Wheel zoom is camera interaction too: drop the hover ghost while zooming.
 canvas.addEventListener('wheel', () => { clearHover(); renderFrame(); }, { passive: true });

@@ -146,6 +146,19 @@ test('trash overlay removes the selected panel and its connectors', async ({ pag
   expect(b.world.connectors.size).toBe(0);
 });
 
+test('right-clicking a placed panel removes it', async ({ page }) => {
+  const box = await canvasBox(page);
+  const x = box.x + box.width * 0.42;
+  const y = box.y + box.height * 0.55;
+  await page.mouse.click(x, y, { button: 'left' });
+  await page.waitForTimeout(150);
+
+  await page.mouse.click(x, y, { button: 'right' });
+  await expect.poll(() =>
+    page.evaluate(() => (window as unknown as { __builder: Builder }).__builder.world.panels.size)
+  ).toBe(0);
+});
+
 test('clicking a sidebar type re-types the selected panel', async ({ page }) => {
   const box = await canvasBox(page);
   await page.mouse.move(box.x + box.width * 0.42, box.y + box.height * 0.55, { steps: 3 });
