@@ -4,15 +4,16 @@ export type MaterialTarget = 'metal' | 'connector';
 
 export interface UICallbacks {
   onTypeClick(id: string): void;
-  onAddCustom(color: string): void;
+  onAddCustom(color: string): string;
   onSetTypeColor(id: string, color: string): void;
   onSetMaterialColor(target: MaterialTarget, color: string): void;
   onRemoveType(id: string, replacementId: string | null): void;
   onRemoveSelected(): void;
   onTableSelect(len: number): void;
   onQuickModeChange(enabled: boolean): void;
-  onSave(): boolean;
-  onLoad(): boolean;
+  onSaveNamed(name: string): boolean;
+  onLoadNamed(name: string): boolean;
+  onListDesignNames(): string[];
   onNew(): void;
   onShare(): Promise<boolean>;
   onDumpState(): Promise<boolean>;
@@ -29,6 +30,29 @@ const PALETTE = [
   '#14b8a6', '#06b6d4', '#3b82f6', '#6366f1', '#8b5cf6', '#d946ef',
   '#f43f5e', '#a16207', '#78716c', '#f8fafc',
 ];
+
+function hexToHsl(color: string): { h: number; s: number; l: number } {
+  const value = Number.parseInt(color.slice(1), 16);
+  const r = ((value >> 16) & 255) / 255;
+  const g = ((value >> 8) & 255) / 255;
+  const b = (value & 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  const lightness = (max + min) / 2;
+  const saturation = delta === 0 ? 0 : delta / (1 - Math.abs(2 * lightness - 1));
+  const hue = delta === 0 ? 0 : ((max === r
+    ? (g - b) / delta + (g < b ? 6 : 0)
+    : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4) * 60);
+  return { h: Math.round(hue) % 360, s: Math.round(saturation * 100), l: Math.round(lightness * 100) };
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const lightness = l / 100;
+  const chroma = (s / 100) * Math.min(lightness, 1 - lightness);
+  const channel = (n: number) => Math.round(255 * (lightness - chroma * Math.max(-1, Math.min((n + h / 30) % 12 - 3, 9 - (n + h / 30) % 12, 1)))).toString(16).padStart(2, '0');
+  return `#${channel(0)}${channel(8)}${channel(4)}`;
+}
 const GITHUB_URL = 'https://github.com/xaviergmail/artist-alley-display-builder';
 
 type ColorTarget =
@@ -56,6 +80,9 @@ export class UI {
   private colorTarget: ColorTarget | undefined;
   private replacementDialog: HTMLDialogElement;
   private tutorialDialog: HTMLDialogElement;
+  private designDialog: HTMLDialogElement;
+  private confirmationDialog: HTMLDialogElement;
+  private colorSliders!: { root: HTMLDivElement; h: HTMLInputElement; s: HTMLInputElement; l: HTMLInputElement; values: HTMLOutputElement[] };
   private countBar: HTMLDivElement;
 
   constructor(sidebar: HTMLElement, viewport: HTMLElement, private cbs: UICallbacks) {
@@ -89,6 +116,8 @@ export class UI {
     ({ dialog: this.colorDialog, title: this.colorDialogTitle, hex: this.colorHex, preview: this.colorPreview } = this.makeColorDialog());
     this.replacementDialog = this.makeReplacementDialog();
     this.tutorialDialog = this.makeTutorialDialog();
+    this.designDialog = this.makeDesignDialog();
+    this.confirmationDialog = this.makeConfirmationDialog();
 
     const footer = document.createElement('div');
     footer.className = 'sidebar-footer';
@@ -96,17 +125,13 @@ export class UI {
     actions.className = 'assembly-actions';
     actions.append(
       this.makeActionButton('New assembly', 'file', 'Start a fresh assembly', () => {
-        this.cbs.onNew();
-        this.showStatus('Started a new assembly', 'success');
+        this.requestConfirmation('Start a new assembly?', 'The current unsaved assembly will be replaced.', () => {
+          this.cbs.onNew();
+          this.showStatus('Started a new assembly', 'success');
+        });
       }),
-      this.makeActionButton('Save', 'floppy-disk', 'Save this assembly in this browser', () => {
-        const saved = this.cbs.onSave();
-        this.showStatus(saved ? 'Saved in this browser' : 'Could not save assembly', saved ? 'success' : 'error');
-      }),
-      this.makeActionButton('Load', 'folder-open', 'Load the browser-saved assembly', () => {
-        const loaded = this.cbs.onLoad();
-        this.showStatus(loaded ? 'Saved assembly restored' : 'No saved assembly found', loaded ? 'success' : 'error');
-      }),
+      this.makeActionButton('Save design', 'floppy-disk', 'Save this assembly under a name', () => this.openDesignDialog('save')),
+      this.makeActionButton('Load design', 'folder-open', 'Load a saved named design', () => this.openDesignDialog('load')),
       this.makeActionButton('Share', 'share-nodes', 'Copy a shareable assembly URL', async () => {
         const shared = await this.cbs.onShare();
         this.showStatus(shared ? 'Share URL copied' : 'Could not copy share URL', shared ? 'success' : 'error');
@@ -208,6 +233,34 @@ export class UI {
 
     const preview = document.createElement('span');
     preview.className = 'color-preview';
+    const sliders = document.createElement('div');
+    sliders.className = 'hsl-sliders';
+    const values: HTMLOutputElement[] = [];
+    const controls = (['Hue', 'Saturation', 'Lightness'] as const).map((label, index) => {
+      const row = document.createElement('label');
+      row.className = 'hsl-row';
+      const caption = document.createElement('span');
+      caption.textContent = label[0];
+      const input = document.createElement('input');
+      input.className = `hsl-range hsl-${label[0].toLowerCase()}`;
+      input.type = 'range';
+      input.min = '0';
+      input.max = index === 0 ? '360' : '100';
+      input.step = '1';
+      input.setAttribute('aria-label', label);
+      const value = document.createElement('output');
+      values.push(value);
+      row.append(caption, input, value);
+      sliders.appendChild(row);
+      return input;
+    });
+    this.colorSliders = { root: sliders, h: controls[0], s: controls[1], l: controls[2], values };
+    for (const slider of controls) slider.addEventListener('input', () => {
+      const color = hslToHex(Number(this.colorSliders.h.value), Number(this.colorSliders.s.value), Number(this.colorSliders.l.value));
+      this.setColorUI(color);
+    });
+    for (const slider of controls) slider.addEventListener('change', () => this.commitColor(this.colorHex.value, false));
+
     const palette = document.createElement('div');
     palette.className = 'color-palette';
     palette.setAttribute('aria-label', 'Color palette');
@@ -231,10 +284,14 @@ export class UI {
     hex.autocomplete = 'off';
     hex.spellcheck = false;
     hex.setAttribute('aria-label', 'Hex color');
+    hex.addEventListener('input', () => {
+      const color = hex.value.trim().replace(/^([^#])/, '#$1').toLowerCase();
+      if (/^#[\da-f]{6}$/.test(color)) this.setColorUI(color, false);
+    });
     hex.addEventListener('keydown', (event) => { if (event.key === 'Enter') this.commitColor(hex.value); });
     hex.addEventListener('change', () => this.commitColor(hex.value));
     hexLabel.appendChild(hex);
-    dialog.append(header, preview, palette, hexLabel);
+    dialog.append(header, preview, sliders, palette, hexLabel);
     dialog.addEventListener('close', () => { this.colorTarget = undefined; });
     document.body.appendChild(dialog);
     return { dialog, title, hex, preview };
@@ -245,6 +302,121 @@ export class UI {
     dialog.className = 'replacement-dialog';
     document.body.appendChild(dialog);
     return dialog;
+  }
+
+  private makeConfirmationDialog(): HTMLDialogElement {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'confirmation-dialog';
+    document.body.appendChild(dialog);
+    return dialog;
+  }
+
+  private requestConfirmation(titleText: string, bodyText: string, onConfirm: () => void): void {
+    const title = document.createElement('h2');
+    title.textContent = titleText;
+    const body = document.createElement('p');
+    body.textContent = bodyText;
+    const actions = document.createElement('div');
+    actions.className = 'dialog-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => this.confirmationDialog.close());
+    const confirm = document.createElement('button');
+    confirm.className = 'danger-confirm';
+    confirm.type = 'button';
+    confirm.textContent = 'Continue';
+    confirm.addEventListener('click', () => {
+      this.confirmationDialog.close();
+      onConfirm();
+    });
+    actions.append(cancel, confirm);
+    this.confirmationDialog.replaceChildren(title, body, actions);
+    this.confirmationDialog.showModal();
+  }
+
+  private makeDesignDialog(): HTMLDialogElement {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'design-dialog';
+    document.body.appendChild(dialog);
+    return dialog;
+  }
+
+  private openDesignDialog(mode: 'save' | 'load'): void {
+    const title = document.createElement('h2');
+    title.textContent = mode === 'save' ? 'Save named design' : 'Load named design';
+    const close = document.createElement('button');
+    close.className = 'dialog-close';
+    close.type = 'button';
+    close.title = 'Close design library';
+    close.setAttribute('aria-label', 'Close design library');
+    close.innerHTML = CLOSE_ICON;
+    close.addEventListener('click', () => this.designDialog.close());
+    const header = document.createElement('header');
+    header.append(title, close);
+    const names = this.cbs.onListDesignNames();
+    const list = document.createElement('div');
+    list.className = 'design-list';
+
+    if (mode === 'save') {
+      const label = document.createElement('label');
+      label.className = 'design-name-field';
+      label.textContent = 'Design name';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.maxLength = 60;
+      input.placeholder = `Design ${names.length + 1}`;
+      input.autofocus = true;
+      label.appendChild(input);
+      const save = document.createElement('button');
+      save.className = 'primary-dialog-action';
+      save.type = 'button';
+      save.textContent = 'Save design';
+      save.addEventListener('click', () => {
+        const name = input.value.trim() || input.placeholder;
+        const saved = this.cbs.onSaveNamed(name);
+        if (saved) {
+          this.designDialog.close();
+          this.showStatus(`Saved “${name}”`, 'success');
+        } else {
+          input.setAttribute('aria-invalid', 'true');
+        }
+      });
+      for (const name of names) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.textContent = name;
+        item.addEventListener('click', () => { input.value = name; input.focus(); });
+        list.appendChild(item);
+      }
+      this.designDialog.replaceChildren(header, label, save, list);
+    } else {
+      if (names.length === 0) {
+        const empty = document.createElement('p');
+        empty.textContent = 'No saved designs in this browser yet.';
+        list.appendChild(empty);
+      }
+      for (const name of names) {
+        const item = document.createElement('button');
+        item.className = 'saved-design';
+        item.type = 'button';
+        item.textContent = name;
+        item.addEventListener('click', () => {
+          this.designDialog.close();
+          this.requestConfirmation(
+            `Load “${name}”?`,
+            'The current unsaved assembly will be replaced.',
+            () => {
+              const loaded = this.cbs.onLoadNamed(name);
+              this.showStatus(loaded ? `Loaded “${name}”` : `Could not load “${name}”`, loaded ? 'success' : 'error');
+            },
+          );
+        });
+        list.appendChild(item);
+      }
+      this.designDialog.replaceChildren(header, list);
+    }
+    this.designDialog.showModal();
   }
 
   private makeTutorialDialog(): HTMLDialogElement {
@@ -263,12 +435,12 @@ export class UI {
     header.append(title, close);
     const steps = [
       ['Navigate', 'Drag with one finger or the left mouse button to orbit. Two fingers pan or pinch to zoom; the mouse wheel also zooms.'],
-      ['Place panels', 'Normal mode: tap a panel or the table, then tap one of the blue possible-panel previews. Impossible placements are never shown.'],
+      ['Place panels', 'Normal mode: tap the table once to place a panel, or tap a panel then tap one of the blue possible-panel previews. Impossible placements are never shown.'],
       ['Quick build', 'Turn on Quick build in the sidebar for the original hover-a-preview, click-to-place workflow.'],
       ['Connectors', 'Connectors are placed and aligned automatically. Free table-edge connectors face inward toward the chair.'],
       ['Panel types', 'Choose a panel type at left, or add any colored plain panel. The Metal and Connector controls set global finishes.'],
       ['Counts', 'The bar at the bottom lists each panel type and the total number of connectors.'],
-      ['Save and share', 'Save and Load stay in this browser only. Share copies a URL with the entire assembly state for someone else.'],
+      ['Save and share', 'Save named designs and load them later in this browser. Share copies a URL with the entire assembly state for someone else.'],
       ['Table size', 'Choose 3, 4, 6, or 8 feet from the controls above the table.'],
     ];
     const list = document.createElement('ol');
@@ -284,25 +456,42 @@ export class UI {
     return dialog;
   }
 
+  private setColorUI(color: string, writeHex = true): void {
+    const hsl = hexToHsl(color);
+    this.colorPreview.style.setProperty('--swatch', color);
+    this.colorSliders.root.style.setProperty('--h', String(hsl.h));
+    this.colorSliders.root.style.setProperty('--s', `${hsl.s}%`);
+    this.colorSliders.root.style.setProperty('--l', `${hsl.l}%`);
+    for (const slider of [this.colorSliders.h, this.colorSliders.s, this.colorSliders.l]) slider.style.setProperty('--swatch', color);
+    this.colorSliders.h.value = String(hsl.h);
+    this.colorSliders.s.value = String(hsl.s);
+    this.colorSliders.l.value = String(hsl.l);
+    this.colorSliders.values[0].value = String(hsl.h);
+    this.colorSliders.values[1].value = `${hsl.s}%`;
+    this.colorSliders.values[2].value = `${hsl.l}%`;
+    if (writeHex) this.colorHex.value = color;
+    this.colorHex.removeAttribute('aria-invalid');
+  }
+
   private openColorPicker(target: ColorTarget, color: string, title: string): void {
     this.colorTarget = target;
     this.colorDialogTitle.textContent = title;
-    this.colorHex.value = color;
-    this.colorHex.removeAttribute('aria-invalid');
-    this.colorPreview.style.setProperty('--swatch', color);
+    this.setColorUI(color);
     this.colorDialog.showModal();
   }
 
-  private commitColor(raw: string): void {
+  private commitColor(raw: string, close = true): void {
     const color = raw.trim().replace(/^([^#])/, '#$1').toLowerCase();
     if (!/^#[\da-f]{6}$/.test(color)) {
       this.colorHex.setAttribute('aria-invalid', 'true');
       return;
     }
-    if (this.colorTarget?.kind === 'new') this.cbs.onAddCustom(color);
-    else if (this.colorTarget?.kind === 'type') this.cbs.onSetTypeColor(this.colorTarget.id, color);
+    if (this.colorTarget?.kind === 'new') {
+      const id = this.cbs.onAddCustom(color);
+      this.colorTarget = { kind: 'type', id };
+    } else if (this.colorTarget?.kind === 'type') this.cbs.onSetTypeColor(this.colorTarget.id, color);
     else if (this.colorTarget?.kind === 'material') this.cbs.onSetMaterialColor(this.colorTarget.target, color);
-    this.colorDialog.close();
+    if (close) this.colorDialog.close();
   }
 
   private makeOverlayTrash(viewport: HTMLElement, onClick: () => void): HTMLButtonElement {

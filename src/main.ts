@@ -20,7 +20,9 @@ if (!viewport || !sidebar) throw new Error('missing #viewport/#sidebar');
 const viewportEl: HTMLElement = viewport;
 
 const SHARE_PARAM = 'assembly';
-const SAVE_KEY = 'artist-alley-display-builder:assembly-v1';
+const LEGACY_SAVE_KEY = 'artist-alley-display-builder:assembly-v1';
+const DESIGN_INDEX_KEY = 'artist-alley-display-builder:designs-v1';
+const DESIGN_KEY_PREFIX = 'artist-alley-display-builder:design-v1:';
 const QUICK_MODE_KEY = 'artist-alley-display-builder:quick-mode';
 
 function restoreFromUrl(target: World): boolean {
@@ -39,20 +41,21 @@ function syncUrl(target: World): void {
   history.replaceState(null, '', url);
 }
 
+let defaultPlainColor = '#000000';
+
 function seedDefaultTypes(target: World): void {
-  target.types.set('plain', { id: 'plain', kind: 'plain', color: '#000000', custom: false });
+  target.types.set('plain', { id: 'plain', kind: 'plain', color: defaultPlainColor, custom: false });
   target.types.set('grid', { id: 'grid', kind: 'grid', color: '#000000', custom: false });
   target.types.set('outline', { id: 'outline', kind: 'outline', color: '#000000', custom: false });
 }
 
 const world = new World();
 seedDefaultTypes(world);
-restoreFromUrl(world);
+const restoredFromUrl = restoreFromUrl(world);
 const sceneCtx = new SceneCtx(viewport);
 const canvas = sceneCtx.renderer.domElement;
 sceneCtx.setTableLength(world.tableLength);
 canvas.style.touchAction = 'none';
-
 // ---------------------------------------------------------------- picking
 
 const raycaster = new THREE.Raycaster();
@@ -212,12 +215,12 @@ function clearNormalCandidates(): void {
   sceneCtx.setCandidateGhosts([]);
 }
 
-function showNormalCandidates(candidates: Placement[]): void {
+function showNormalCandidates(candidates: Placement[], anchor?: Placement): void {
   const type = world.types.get(world.activeTypeId);
   clearNormalCandidates();
   if (!type) return;
   for (const candidate of candidates) normalCandidates.set(panelKey(candidate), candidate);
-  sceneCtx.setCandidateGhosts([...normalCandidates.values()].map((placement) => ({ placement, type })));
+  sceneCtx.setCandidateGhosts([...normalCandidates.values()].map((placement) => ({ placement, type, anchor })));
   renderFrame();
 }
 
@@ -335,7 +338,7 @@ function updateHover(clientX: number, clientY: number): void {
 }
 
 function refresh(): void {
-  sceneCtx.rebuild(world);
+  sceneCtx.rebuild(world, buildMode === 'quick');
   ui.updateTypes(world.types, world.activeTypeId);
   ui.updateMaterials(world.metalColor, world.connectorColor);
   ui.setTableActive(world.tableLength);
@@ -384,19 +387,71 @@ async function copyText(text: string, label: string): Promise<boolean> {
   return false;
 }
 
-function saveAssembly(): boolean {
+interface DesignSummary {
+  name: string;
+  updatedAt: number;
+}
+
+interface DesignIndex {
+  version: 1;
+  designs: DesignSummary[];
+}
+
+function readDesignIndex(): DesignIndex {
   try {
-    localStorage.setItem(SAVE_KEY, assemblyJson());
+    const parsed = JSON.parse(localStorage.getItem(DESIGN_INDEX_KEY) ?? 'null') as Partial<DesignIndex> | null;
+    if (parsed?.version === 1 && Array.isArray(parsed.designs)) {
+      return { version: 1, designs: parsed.designs.filter((item): item is DesignSummary =>
+        typeof item?.name === 'string' && typeof item.updatedAt === 'number') };
+    }
+  } catch { /* Recover as an empty browser-local library. */ }
+  return { version: 1, designs: [] };
+}
+
+function writeDesignIndex(index: DesignIndex): void {
+  localStorage.setItem(DESIGN_INDEX_KEY, JSON.stringify(index));
+}
+
+function designKey(name: string): string {
+  return `${DESIGN_KEY_PREFIX}${encodeURIComponent(name)}`;
+}
+
+function migrateLegacySave(): void {
+  const index = readDesignIndex();
+  if (index.designs.length || !localStorage.getItem(LEGACY_SAVE_KEY)) return;
+  const name = 'Saved design';
+  localStorage.setItem(designKey(name), localStorage.getItem(LEGACY_SAVE_KEY)!);
+  writeDesignIndex({ version: 1, designs: [{ name, updatedAt: Date.now() }] });
+}
+
+function designNames(): string[] {
+  migrateLegacySave();
+  return readDesignIndex().designs.sort((a, b) => b.updatedAt - a.updatedAt).map((design) => design.name);
+}
+
+function saveDesign(rawName: string): boolean {
+  const name = rawName.trim().replace(/\s+/g, ' ').slice(0, 60);
+  if (!name) return false;
+  try {
+    migrateLegacySave();
+    localStorage.setItem(designKey(name), assemblyJson());
+    const index = readDesignIndex();
+    const updatedAt = Date.now();
+    const existing = index.designs.find((design) => design.name === name);
+    if (existing) existing.updatedAt = updatedAt;
+    else index.designs.push({ name, updatedAt });
+    writeDesignIndex(index);
     return true;
   } catch (error) {
-    console.error('Could not save assembly', error);
+    console.error('Could not save design', error);
     return false;
   }
 }
 
-function loadAssembly(): boolean {
+function loadDesign(name: string): boolean {
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
+    migrateLegacySave();
+    const raw = localStorage.getItem(designKey(name));
     if (!raw || !world.restore(JSON.parse(raw) as AssemblyState)) return false;
     sceneCtx.setTableLength(world.tableLength);
     clearHover();
@@ -404,7 +459,7 @@ function loadAssembly(): boolean {
     refresh();
     return true;
   } catch (error) {
-    console.error('Could not load saved assembly', error);
+    console.error('Could not load design', error);
     return false;
   }
 }
@@ -476,15 +531,14 @@ function handleNormalTap(clientX: number, clientY: number): void {
     if (!panel) return;
     world.selectedKey = picked.panelKeyHit;
     refresh();
-    showNormalCandidates(candidatesForPanel(panel));
+    showNormalCandidates(candidatesForPanel(panel), panel);
     return;
   }
   if (picked.tablePoint) {
     const candidateOnTable = tableCandidate(picked.tablePoint);
     if (candidateOnTable) {
       world.selectedKey = null;
-      refresh();
-      showNormalCandidates([candidateOnTable]);
+      placePanelAt(candidateOnTable);
       return;
     }
   }
@@ -506,6 +560,7 @@ const ui = new UI(sidebar, viewport, {
     const type = world.addCustomType(color);
     world.activeTypeId = type.id;
     refresh();
+    return type.id;
   },
   onSetTypeColor: (id, color) => {
     world.setTypeColor(id, color);
@@ -541,8 +596,9 @@ const ui = new UI(sidebar, viewport, {
     clearNormalCandidates();
     renderFrame();
   },
-  onSave: () => saveAssembly(),
-  onLoad: () => loadAssembly(),
+  onSaveNamed: (name) => saveDesign(name),
+  onLoadNamed: (name) => loadDesign(name),
+  onListDesignNames: () => designNames(),
   onNew: () => startNewAssembly(),
   onShare: () => copyShareUrl(),
   onDumpState: () => copyAssemblyJson(),
@@ -599,7 +655,7 @@ canvas.addEventListener('pointerup', (e) => {
     rightDown = null;
     camDragging = false;
     canvas.style.cursor = 'default';
-    if (panelKeyHit) {
+    if (panelKeyHit && buildMode === 'quick') {
       world.removePanel(panelKeyHit);
       clearHover();
       clearNormalCandidates();
@@ -714,8 +770,13 @@ function debugInfo(): {
 
  (window as unknown as Record<string, unknown>).__builder = { world, sceneCtx, debug: { info: debugInfo, raycaster, ndc, setNdc, updateHover, get anchors() { return connectorAnchors; }, get gesture() { return { camDragging, touchGesture, activePointerCount: activePointers.size, normalCandidateCount: normalCandidates.size }; } } };
 
-// Swap procedural fallback panels for the Blender models once loaded. Material
-// colors never write back into World: panel-type colors are user state and may
-// have been restored from a share URL before this promise settles.
-loadPanelAssets().then(() => refresh());
+loadPanelAssets().then((colors) => {
+  if (colors) {
+    defaultPlainColor = colors.plain;
+    if (!restoredFromUrl && world.panels.size === 0 && world.types.get('plain')?.color === '#000000') {
+      world.setTypeColor('plain', defaultPlainColor);
+    }
+  }
+  refresh();
+});
 refresh();

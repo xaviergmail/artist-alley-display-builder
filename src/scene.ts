@@ -6,6 +6,7 @@ import panelsUrl from '../assets/Panels.glb?url';
 import {
   STEP,
   panelCenter,
+  panelCorners,
   panelKey,
   parsePointKey,
   type Connector,
@@ -88,7 +89,8 @@ export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', 
           geo.translate(-center.x, -center.y, -center.z);
           geo.scale(scale, scale, scale);
           out[kind] = { geometry: geo, materials: mats };
-          colors[kind] = '#' + (mats[0] as THREE.MeshStandardMaterial).color.getHexString();
+          const surface = mats.find((material) => material.name === 'Panel') as THREE.MeshStandardMaterial | undefined;
+          colors[kind] = '#' + (surface ?? mats[0] as THREE.MeshStandardMaterial).color.getHexString();
         }
         // Connector hub mesh (no children, origin = the connection point:
         // the bbox is asymmetric toward the cross-side protrusion, so
@@ -401,7 +403,7 @@ export class SceneCtx {
     this.tableGroup.add(chair);
   }
 
-  rebuild(world: World): void {
+  rebuild(world: World, showSelection = true): void {
     clearGroup(this.panelGroup);
     clearGroup(this.connectorGroup);
     this.panelMeshes.clear();
@@ -417,11 +419,11 @@ export class SceneCtx {
     for (const [key, conn] of world.connectors) {
       this.connectorGroup.add(buildConnector(conn, parsePointKey(key), false, false, world.connectorColor));
     }
-    this.updateSelection(world);
+    this.updateSelection(world, showSelection);
   }
 
-  private updateSelection(world: World): void {
-    const mesh = world.selectedKey ? this.panelMeshes.get(world.selectedKey) : undefined;
+  private updateSelection(world: World, showSelection: boolean): void {
+    const mesh = showSelection && world.selectedKey ? this.panelMeshes.get(world.selectedKey) : undefined;
     if (!mesh) {
       this.selectionHelper.visible = false;
       return;
@@ -442,12 +444,25 @@ export class SceneCtx {
     }
   }
 
-  setCandidateGhosts(candidates: Array<{ placement: Placement; type: PanelType }>): void {
+  setCandidateGhosts(candidates: Array<{ placement: Placement; type: PanelType; anchor?: Placement }>): void {
     clearGroup(this.markerGroup);
     for (const candidate of candidates) {
       const obj = buildPanelContent(candidate.type, true);
       placePanel(obj, candidate.placement);
-      obj.scale.setScalar(2 / 3);
+      obj.scale.setScalar(0.5);
+      if (candidate.anchor) {
+        const anchorCorners = new Set(panelCorners(candidate.anchor).map((corner) => corner.join(',')));
+        const shared = panelCorners(candidate.placement).filter((corner) => anchorCorners.has(corner.join(',')));
+        if (shared.length === 2) {
+          const center = panelCenter(candidate.placement);
+          const edgeMidpoint = [0, 1, 2].map((axis) => (shared[0][axis] + shared[1][axis]) * STEP / 2) as [number, number, number];
+          obj.position.set(
+            (center[0] + edgeMidpoint[0]) / 2,
+            (center[1] + edgeMidpoint[1]) / 2,
+            (center[2] + edgeMidpoint[2]) / 2,
+          );
+        }
+      }
       obj.userData.candidateKey = panelKey(candidate.placement);
       this.markerGroup.add(obj);
     }

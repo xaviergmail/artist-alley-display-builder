@@ -418,35 +418,51 @@ async function clickProjected(page: Page, objectExpression: string): Promise<voi
   }, objectExpression);
   await page.mouse.click(point.x, point.y);
 }
-test('normal mode anchors table placement then places only a legal ghost', async ({ page }) => {
+test('normal mode places a table panel in one click', async ({ page }) => {
   await page.locator('.quick-mode-btn').click();
   await expect(page.locator('.quick-mode-btn')).toHaveText('Quick build: Off');
   await clickProjected(page, 'b.sceneCtx.tableTop');
-  await expect.poll(() => page.evaluate(() => (window as any).__builder.sceneCtx.markerGroup.children.length)).toBe(1);
-  expect((await builder(page)).world.panels.size).toBe(0);
-
-  await clickProjected(page, 'b.sceneCtx.markerGroup.children[0]');
   const state = await page.evaluate(() => {
     const b = (window as any).__builder;
-    return { panels: [...b.world.panels.values()], connectors: [...b.world.connectors.values()] };
+    return { panels: [...b.world.panels.values()], connectors: [...b.world.connectors.values()], markers: b.sceneCtx.markerGroup.children.length };
   });
   expect(state.panels).toHaveLength(1);
-  expect(state.connectors).toEqual(expect.arrayContaining([
-    expect.objectContaining({ plane: 'y', sign: 1, turn: 2 }),
-  ]));
+  expect(state.markers).toBe(0);
+  expect(state.connectors).toEqual(expect.arrayContaining([expect.objectContaining({ plane: 'y', sign: 1, turn: 2 })]));
 });
 
-test('save and load controls restore browser-local assembly state', async ({ page }) => {
+test('normal mode uses half-size edge-pressed ghosts without a blue selection helper', async ({ page }) => {
   await page.locator('.quick-mode-btn').click();
   await clickProjected(page, 'b.sceneCtx.tableTop');
-  await clickProjected(page, 'b.sceneCtx.markerGroup.children[0]');
-  await page.getByRole('button', { name: 'Save' }).click();
-  await expect(page.locator('.action-status')).toHaveText('Saved in this browser');
-
   await clickProjected(page, 'b.sceneCtx.panelGroup.children[0]');
-  await clickProjected(page, 'b.sceneCtx.markerGroup.children[0]');
-  await expect.poll(() => page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(2);
-  await page.getByRole('button', { name: 'Load' }).click();
+  const state = await page.evaluate(() => {
+    const b = (window as any).__builder;
+    const marker = b.sceneCtx.markerGroup.children.find((child: any) => child.position.toArray().every(Number.isFinite));
+    return { selected: b.world.selectedKey, selectionVisible: b.sceneCtx.selectionHelper.visible, scale: marker.scale.toArray(), markers: b.sceneCtx.markerGroup.children.length };
+  });
+  expect(state.selected).not.toBeNull();
+  expect(state.selectionVisible).toBe(false);
+  expect(state.scale).toEqual([0.5, 0.5, 0.5]);
+  expect(state.markers).toBeGreaterThan(0);
+});
+
+test('named designs restore only after explicit load confirmation', async ({ page }) => {
+  await page.locator('.quick-mode-btn').click();
+  await clickProjected(page, 'b.sceneCtx.tableTop');
+  await page.getByRole('button', { name: 'Save design' }).click();
+  await page.locator('.design-name-field input').fill('Corner');
+  await page.getByRole('button', { name: 'Save design' }).last().click();
+  await expect(page.locator('.action-status')).toHaveText('Saved “Corner”');
+
+  await page.getByRole('button', { name: 'New assembly' }).click();
+  await expect(page.locator('.confirmation-dialog')).toBeVisible();
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(0);
+
+  await page.getByRole('button', { name: 'Load design' }).click();
+  await page.getByRole('button', { name: 'Corner' }).click();
+  await expect(page.locator('.confirmation-dialog')).toBeVisible();
+  await page.getByRole('button', { name: 'Continue' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(1);
 });
 
@@ -467,41 +483,46 @@ test('global material controls and share button serialize global finishes', asyn
   expect(assembly).toMatchObject({ metalColor: '#3b82f6', connectorColor: '#ef4444' });
 });
 
+test('HSL sliders synchronize the active plain panel color', async ({ page }) => {
+  await page.locator('.type-btn[data-type-id="plain"]').locator('..').locator('.type-color-btn').click();
+  await page.evaluate(() => {
+    const sliders = [...document.querySelectorAll<HTMLInputElement>('.hsl-range')];
+    for (const [slider, value] of [[sliders[0], '0'], [sliders[1], '80'], [sliders[2], '40']] as const) {
+      slider.value = value;
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      slider.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+  const color = await page.evaluate(() => (window as any).__builder.world.types.get('plain').color);
+  expect(color).toMatch(/^#[\da-f]{6}$/);
+  expect(await page.locator('.hex-field input').inputValue()).toBe(color);
+});
+
 test('tutorial describes navigation, build modes, persistence, and sharing', async ({ page }) => {
   await page.getByRole('button', { name: 'Show builder tutorial' }).click();
   const tutorial = page.locator('.tutorial-dialog');
   await expect(tutorial).toBeVisible();
   await expect(tutorial).toContainText('Two fingers pan or pinch to zoom');
+  await expect(tutorial).toContainText('tap the table once');
   await expect(tutorial).toContainText('Quick build');
-  await expect(tutorial).toContainText('Save and Load stay in this browser only');
+  await expect(tutorial).toContainText('Save named designs');
   await expect(tutorial).toContainText('Share copies a URL');
 });
 
-test('new assembly resets active state without discarding browser save', async ({ page }) => {
+test('new assembly requires confirmation and preserves named browser saves', async ({ page }) => {
   await page.locator('.quick-mode-btn').click();
   await clickProjected(page, 'b.sceneCtx.tableTop');
-  await clickProjected(page, 'b.sceneCtx.markerGroup.children[0]');
-  await page.getByRole('button', { name: 'Save' }).click();
+  await page.getByRole('button', { name: 'Save design' }).click();
+  await page.locator('.design-name-field input').fill('Recovery');
+  await page.getByRole('button', { name: 'Save design' }).last().click();
   await page.getByRole('button', { name: 'New assembly' }).click();
+  await expect(page.locator('.confirmation-dialog')).toBeVisible();
+  await page.getByRole('button', { name: 'Continue' }).click();
 
   const state = await page.evaluate(() => {
     const b = (window as any).__builder;
-    return {
-      panels: b.world.panels.size,
-      connectors: b.world.connectors.size,
-      tableLength: b.world.tableLength,
-      activeType: b.world.activeTypeId,
-      typeIds: [...b.world.types.keys()],
-      saved: JSON.parse(localStorage.getItem('artist-alley-display-builder:assembly-v1')!).panels.length,
-    };
+    return { panels: b.world.panels.size, names: JSON.parse(localStorage.getItem('artist-alley-display-builder:designs-v1')!).designs.map((design: { name: string }) => design.name) };
   });
-  expect(state).toEqual({
-    panels: 0,
-    connectors: 0,
-    tableLength: 72,
-    activeType: 'plain',
-    typeIds: ['plain', 'grid', 'outline'],
-    saved: 1,
-  });
-  await expect(page.locator('.action-status')).toHaveText('Started a new assembly');
+  expect(state.panels).toBe(0);
+  expect(state.names).toContain('Recovery');
 });
