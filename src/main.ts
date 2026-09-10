@@ -247,6 +247,9 @@ canvas.addEventListener('pointerup', (e) => {
   }
 });
 
+// Wheel zoom is camera interaction too: drop the hover ghost while zooming.
+canvas.addEventListener('wheel', () => clearHover(), { passive: true });
+
 window.addEventListener('resize', () => {
   sceneCtx.camera.aspect = viewport.clientWidth / viewport.clientHeight;
   sceneCtx.camera.updateProjectionMatrix();

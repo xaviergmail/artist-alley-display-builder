@@ -95,33 +95,38 @@ function placePanel(obj: THREE.Group, p: Placement): void {
   if (p.plane === 'y') obj.rotation.x = -Math.PI / 2;
 }
 
+// Real-world scale: panels are 30 cm squares; the connector is ~32 mm across.
+const CONN = 1.26; // inches
+const CONN_T = 0.16;
+const RIB_L = 2.4;
+const RIB_W = 0.42;
+const RIB_T = 0.14;
 function buildConnector(conn: Connector, corner: [number, number, number], ghost: boolean): THREE.Group {
   const g = new THREE.Group();
   const mat = ghost ? ghostMaterial() : new THREE.MeshStandardMaterial({ color: 0x2b2f33, roughness: 0.5, metalness: 0.4 });
   const dims: Record<Connector['plane'], [number, number, number]> = {
-    x: [1, 7, 7],
-    y: [7, 1, 7],
-    z: [7, 7, 1],
+    x: [CONN_T, CONN, CONN],
+    y: [CONN, CONN_T, CONN],
+    z: [CONN, CONN, CONN_T],
   };
   const plate = new THREE.Mesh(new THREE.BoxGeometry(...dims[conn.plane]), mat);
   g.add(plate);
   // Crossed ribs on the perpendicular face (the side perpendicular panels slot into).
-  const rib = 0.9;
-  const off = conn.sign * (rib + 0.4);
+  const off = conn.sign * (CONN_T / 2 + RIB_T / 2);
   const make = (sx: number, sy: number, sz: number, x: number, y: number, z: number) => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
     m.position.set(x, y, z);
     g.add(m);
   };
   if (conn.plane === 'z') {
-    make(9.6, 1, rib, 0, 0, off);
-    make(1, 9.6, rib, 0, 0, off);
+    make(RIB_L, RIB_W, RIB_T, 0, 0, off);
+    make(RIB_W, RIB_L, RIB_T, 0, 0, off);
   } else if (conn.plane === 'y') {
-    make(9.6, rib, 1, 0, off, 0);
-    make(1, rib, 9.6, 0, off, 0);
+    make(RIB_L, RIB_T, RIB_W, 0, off, 0);
+    make(RIB_W, RIB_T, RIB_L, 0, off, 0);
   } else {
-    make(rib, 9.6, 1, off, 0, 0);
-    make(rib, 1, 9.6, off, 0, 0);
+    make(RIB_T, RIB_L, RIB_W, off, 0, 0);
+    make(RIB_T, RIB_W, RIB_L, off, 0, 0);
   }
   g.position.set(corner[0] * STEP, corner[1] * STEP, corner[2] * STEP);
   return g;
