@@ -476,3 +476,32 @@ test('tutorial describes navigation, build modes, persistence, and sharing', asy
   await expect(tutorial).toContainText('Save and Load stay in this browser only');
   await expect(tutorial).toContainText('Share copies a URL');
 });
+
+test('new assembly resets active state without discarding browser save', async ({ page }) => {
+  await page.locator('.quick-mode-btn').click();
+  await clickProjected(page, 'b.sceneCtx.tableTop');
+  await clickProjected(page, 'b.sceneCtx.markerGroup.children[0]');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await page.getByRole('button', { name: 'New assembly' }).click();
+
+  const state = await page.evaluate(() => {
+    const b = (window as any).__builder;
+    return {
+      panels: b.world.panels.size,
+      connectors: b.world.connectors.size,
+      tableLength: b.world.tableLength,
+      activeType: b.world.activeTypeId,
+      typeIds: [...b.world.types.keys()],
+      saved: JSON.parse(localStorage.getItem('artist-alley-display-builder:assembly-v1')!).panels.length,
+    };
+  });
+  expect(state).toEqual({
+    panels: 0,
+    connectors: 0,
+    tableLength: 72,
+    activeType: 'plain',
+    typeIds: ['plain', 'grid', 'outline'],
+    saved: 1,
+  });
+  await expect(page.locator('.action-status')).toHaveText('Started a new assembly');
+});

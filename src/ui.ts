@@ -13,6 +13,7 @@ export interface UICallbacks {
   onQuickModeChange(enabled: boolean): void;
   onSave(): boolean;
   onLoad(): boolean;
+  onNew(): void;
   onShare(): Promise<boolean>;
   onDumpState(): Promise<boolean>;
 }
@@ -94,6 +95,10 @@ export class UI {
     const actions = document.createElement('div');
     actions.className = 'assembly-actions';
     actions.append(
+      this.makeActionButton('New assembly', 'file', 'Start a fresh assembly', () => {
+        this.cbs.onNew();
+        this.showStatus('Started a new assembly', 'success');
+      }),
       this.makeActionButton('Save', 'floppy-disk', 'Save this assembly in this browser', () => {
         const saved = this.cbs.onSave();
         this.showStatus(saved ? 'Saved in this browser' : 'Could not save assembly', saved ? 'success' : 'error');

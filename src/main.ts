@@ -39,10 +39,14 @@ function syncUrl(target: World): void {
   history.replaceState(null, '', url);
 }
 
+function seedDefaultTypes(target: World): void {
+  target.types.set('plain', { id: 'plain', kind: 'plain', color: '#000000', custom: false });
+  target.types.set('grid', { id: 'grid', kind: 'grid', color: '#000000', custom: false });
+  target.types.set('outline', { id: 'outline', kind: 'outline', color: '#000000', custom: false });
+}
+
 const world = new World();
-world.types.set('plain', { id: 'plain', kind: 'plain', color: '#000000', custom: false });
-world.types.set('grid', { id: 'grid', kind: 'grid', color: '#000000', custom: false });
-world.types.set('outline', { id: 'outline', kind: 'outline', color: '#000000', custom: false });
+seedDefaultTypes(world);
 restoreFromUrl(world);
 const sceneCtx = new SceneCtx(viewport);
 const canvas = sceneCtx.renderer.domElement;
@@ -405,6 +409,18 @@ function loadAssembly(): boolean {
   }
 }
 
+function startNewAssembly(): void {
+  const fresh = new World();
+  seedDefaultTypes(fresh);
+  // `world` is shared by the renderer and picking helpers, so restore its
+  // canonical empty state instead of replacing its object identity.
+  if (!world.restore(fresh.toJSON())) throw new Error('Could not reset assembly state');
+  sceneCtx.setTableLength(world.tableLength);
+  clearHover();
+  clearNormalCandidates();
+  refresh();
+}
+
 async function copyAssemblyJson(): Promise<boolean> {
   return copyText(assemblyJson(), 'assembly JSON');
 }
@@ -527,6 +543,7 @@ const ui = new UI(sidebar, viewport, {
   },
   onSave: () => saveAssembly(),
   onLoad: () => loadAssembly(),
+  onNew: () => startNewAssembly(),
   onShare: () => copyShareUrl(),
   onDumpState: () => copyAssemblyJson(),
 });
