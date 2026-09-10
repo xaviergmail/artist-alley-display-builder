@@ -96,11 +96,12 @@ function placePanel(obj: THREE.Group, p: Placement): void {
 }
 
 // Real-world scale: panels are 30 cm squares; the connector is ~32 mm across.
+// The whole assembly (plate + ribs) stays inside that envelope.
 const CONN = 1.26; // inches
 const CONN_T = 0.16;
-const RIB_L = 2.4;
-const RIB_W = 0.42;
-const RIB_T = 0.14;
+const RIB_L = 1.1;
+const RIB_W = 0.3;
+const RIB_T = 0.1;
 function buildConnector(conn: Connector, corner: [number, number, number], ghost: boolean): THREE.Group {
   const g = new THREE.Group();
   const mat = ghost ? ghostMaterial() : new THREE.MeshStandardMaterial({ color: 0x2b2f33, roughness: 0.5, metalness: 0.4 });

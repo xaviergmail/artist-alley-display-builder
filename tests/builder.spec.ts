@@ -199,8 +199,8 @@ test('mouse wheel zooms', async ({ page }) => {
   const before = await page.evaluate(() => (window as unknown as { __builder: Builder }).__builder.sceneCtx.camera.position.toArray());
   const box = await canvasBox(page);
   await page.mouse.move(box.x + 640, box.y + 400, { steps: 2 });
-  await page.mouse.wheel({ deltaY: -120 });
-  await page.mouse.wheel({ deltaY: -120 });
+  await page.mouse.wheel(0, -120);
+  await page.mouse.wheel(0, -120);
   const after = await page.evaluate(() => (window as unknown as { __builder: Builder }).__builder.sceneCtx.camera.position.toArray());
   const dist = (v: number[]) => Math.hypot(v[0], v[1], v[2]);
   expect(dist(after)).toBeLessThan(dist(before));
