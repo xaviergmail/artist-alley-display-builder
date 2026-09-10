@@ -34,6 +34,16 @@ export interface Connector {
   sign: 1 | -1;
 }
 
+export interface AssemblyState {
+  version: 1;
+  tableLength: number;
+  activeTypeId: string;
+  selectedKey: string | null;
+  types: PanelType[];
+  panels: Panel[];
+  connectors: Array<{ point: Corner; plane: Plane; sign: 1 | -1 }>;
+}
+
 export const panelKey = (p: Placement) => `${p.plane}:${p.i},${p.j},${p.k}`;
 export const pointKey = (c: Corner) => `${c[0]},${c[1]},${c[2]}`;
 
@@ -246,6 +256,25 @@ export class World {
       if (this.panels.get(key)!.typeId === id) this.removePanel(key);
     }
     if (this.activeTypeId === id) this.activeTypeId = 'plain';
+  }
+
+  // Stable, plain-data representation for clipboard export and diagnostics.
+  // Maps and counters are intentionally omitted: they are implementation state,
+  // not part of the assembly someone needs to reproduce.
+  toJSON(): AssemblyState {
+    return {
+      version: 1,
+      tableLength: this.tableLength,
+      activeTypeId: this.activeTypeId,
+      selectedKey: this.selectedKey,
+      types: [...this.types.values()].map((type) => ({ ...type })),
+      panels: [...this.panels.values()].map((panel) => ({ ...panel })),
+      connectors: [...this.connectors.entries()].map(([key, connector]) => ({
+        point: parsePointKey(key),
+        plane: connector.plane,
+        sign: connector.sign,
+      })),
+    };
   }
 
   // All empty squares connectable to some placed panel corner.

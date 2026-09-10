@@ -45,6 +45,33 @@ test('sidebar shows the 3 default panel types without remove buttons', async ({ 
   expect(trashCount).toBe(0);
 });
 
+test('bug export button copies a complete assembly JSON snapshot', async ({ page }) => {
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          document.documentElement.dataset.assemblyJson = text;
+        },
+      },
+    });
+  });
+
+  await page.locator('.dump-state-btn').click();
+  await expect.poll(() => page.locator('html').getAttribute('data-assembly-json')).not.toBeNull();
+  const copied = JSON.parse(await page.locator('html').getAttribute('data-assembly-json')!);
+
+  expect(copied).toMatchObject({
+    version: 1,
+    tableLength: 72,
+    activeTypeId: 'plain',
+    selectedKey: null,
+  });
+  expect(copied.types.map((type: { id: string }) => type.id)).toEqual(['plain', 'grid', 'outline']);
+  expect(copied.panels).toEqual([]);
+  expect(copied.connectors).toEqual([]);
+});
+
 test('hovering the table shows a standing-panel ghost with connectors', async ({ page }) => {
   const box = await canvasBox(page);
   await page.mouse.move(box.x + box.width * 0.42, box.y + box.height * 0.55, { steps: 3 });
@@ -250,10 +277,12 @@ test('perpendicular placement shares a corner and serves both panel planes', asy
   expect(connectors.length).toBe(4);
 });
 
-test('invalid edge candidate shows a red ghost and clicking it is rejected', async ({ page }) => {
-  // Build the corner that cannot host another panel: three walls + deck around
-  // one lattice corner, then try to add a fourth panel whose connector would
-  // need two opposite perpendicular extensions.
+test('invalid edge candidate shows a red ghost, rejects its click, and reports diagnostics', async ({ page }) => {
+  const diagnostics: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'warning') diagnostics.push(message.text());
+  });
+
   const result = await page.evaluate(() => {
     const b = (window as unknown as { __builder: any }).__builder;
     const viewport = document.getElementById('viewport')!;
@@ -271,32 +300,37 @@ test('invalid edge candidate shows a red ghost and clicking it is rejected', asy
       }
       return b.debug.info();
     };
-    drive(42, 0, 0, true); // standing panel
-    drive(42, 12, 0, true); // stacked wall
-    drive(42, 12, 2, false); // bottom edge
-    drive(42, 12, 4, false); // swing +z -> deck
-    drive(42, 12, 4, true); // place deck
-    drive(36, 18, 0, false); // left edge
-    drive(36, 18, 5, false); // swing +z -> perpendicular wall
-    drive(36, 18, 5, true);
-    const h = drive(36, 18, 0, false);
-    if (h && h.ghostPlacement) {
-      const g = h.ghostPlacement as { plane: string; i: number; j: number; k: number };
-      drive(g.i * 12 + 6, g.j * 12 + 6, g.k * 12 + 6, true); // coplanar filler
-    }
-    drive(36, 18, 2, false); // x-wall bottom edge
-    drive(36, 18, -3, false); // swing -z -> invalid candidate
-    const mats: string[] = [];
-    b.sceneCtx.ghostGroup.children.forEach((root) => {
-      (root as unknown as { traverse: (cb: (o: { material?: { color: { getHexString(): string } } }) => void }).traverse)((o) => {
-        if (o.material) mats.push(o.material.color.getHexString());
-      });
+
+    drive(42, 0, 0, true); // table-standing panel
+    const preview = drive(42, 0, 0, false); // its bottom edge: j = -1 is illegal
+    const materials: string[] = [];
+    b.sceneCtx.ghostGroup.traverse((o: { material?: { color: { getHexString(): string } } }) => {
+      if (o.material) materials.push(o.material.color.getHexString());
     });
     const before = b.world.panels.size;
-    drive(36, 18, -3, true);
-    return { mats, rejected: b.world.panels.size === before, panels: b.world.panels.size };
+    drive(42, 0, 0, true);
+    return {
+      ghostInvalid: preview?.ghostInvalid,
+      materials,
+      rejected: b.world.panels.size === before,
+      panels: b.world.panels.size,
+    };
   });
-  expect(result.mats).toContain('ef4444');
+
+  expect(result.ghostInvalid).toBe(true);
+  expect(result.materials).toContain('ef4444');
   expect(result.rejected).toBe(true);
-  expect(result.panels).toBe(5);
+  await expect.poll(() => diagnostics.length).toBeGreaterThan(0);
+  const diagnostic = JSON.parse(diagnostics.find((entry) => entry.includes('rejected-red-ghost-placement'))!);
+  expect(diagnostic).toMatchObject({
+    event: 'rejected-red-ghost-placement',
+    attempted: {
+      action: 'place-panel',
+      placement: { plane: 'z', i: 3, j: -1, k: 0 },
+      panelTypeId: 'plain',
+    },
+    assembly: { panels: expect.any(Array), connectors: expect.any(Array) },
+  });
+  expect(diagnostic.assembly.panels).toHaveLength(result.panels);
 });
+

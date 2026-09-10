@@ -311,9 +311,58 @@ function placePanelAt(p: Placement): void {
   refresh();
   updateHover(lastMouse.x, lastMouse.y);
 }
+
+function assemblyJson(): string {
+  return JSON.stringify(world.toJSON(), null, 2);
+}
+
+function fallbackCopy(text: string): boolean {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  return copied;
+}
+
+async function copyAssemblyJson(): Promise<boolean> {
+  const json = assemblyJson();
+  let clipboardError: unknown;
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(json);
+      return true;
+    } catch (error) {
+      clipboardError = error;
+    }
+  }
+  if (fallbackCopy(json)) return true;
+  console.error('Could not copy assembly JSON', clipboardError);
+  return false;
+}
+
+function logRejectedGhostClick(placement: Placement): void {
+  console.warn(JSON.stringify({
+    event: 'rejected-red-ghost-placement',
+    attempted: {
+      action: 'place-panel',
+      placement,
+      panelTypeId: world.activeTypeId,
+      sourceEdge: edgeHover,
+      hoveredPanelKey: hoverPanelKey,
+      pointer: lastMouse,
+    },
+    assembly: world.toJSON(),
+  }, null, 2));
+}
+
 function handleClick(): void {
   if (ghostPlacement) {
-    if (!ghostInvalid) placePanelAt(ghostPlacement);
+    if (ghostInvalid) logRejectedGhostClick(ghostPlacement);
+    else placePanelAt(ghostPlacement);
     return;
   }
   if (hoverPanelKey) {
@@ -326,6 +375,7 @@ function handleClick(): void {
     refresh();
   }
 }
+
 
 const ui = new UI(sidebar, viewport, {
   onTypeClick: (id) => {
@@ -359,6 +409,7 @@ const ui = new UI(sidebar, viewport, {
     sceneCtx.setTableLength(len);
     refresh();
   },
+  onDumpState: () => copyAssemblyJson(),
 });
 
 // ---------------------------------------------------------------- events

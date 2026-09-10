@@ -7,10 +7,14 @@ export interface UICallbacks {
   onRemoveSelected(): void;
   onRemoveHovered(): void;
   onTableSelect(len: number): void;
+  onDumpState(): Promise<boolean>;
 }
 
 const TRASH_SVG =
   '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zM6 9h12l-1.2 12H7.2L6 9z"/></svg>';
+
+const BUG_SVG =
+  '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M19.1 13.5 22 12l-2.9-1.5.4-2.1-2.2.3L16 6.8l.6-2.5-2.2 1.2L12 3l-2.4 2.5-2.2-1.2.6 2.5-1.3 1.9-2.2-.3.4 2.1L2 12l2.9 1.5-.4 2.1 2.2-.3L8 17.2l-.6 2.5 2.2-1.2L12 21l2.4-2.5 2.2 1.2-.6-2.5 1.3-1.9 2.2.3-.4-2.1ZM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10Zm-2-5a2 2 0 1 0 4 0 2 2 0 0 0-4 0Z"/></svg>';
 
 const TABLE_OPTIONS: Array<[number, string]> = [
   [36, '3 ft'],
@@ -26,6 +30,8 @@ export class UI {
   private colorInput: HTMLInputElement;
   private selectedTrash: HTMLButtonElement;
   private hoveredTrash: HTMLButtonElement;
+  private dumpBtn: HTMLButtonElement;
+  private dumpStatusTimer: number | undefined;
   private tableButtons: Array<{ el: HTMLButtonElement; len: number }> = [];
 
   constructor(sidebar: HTMLElement, viewport: HTMLElement, private cbs: UICallbacks) {
@@ -57,6 +63,21 @@ export class UI {
     this.customAdd.append(this.colorInput, confirm);
     sidebar.appendChild(this.customAdd);
 
+    const footer = document.createElement('div');
+    footer.className = 'sidebar-footer';
+    this.dumpBtn = document.createElement('button');
+    this.dumpBtn.className = 'dump-state-btn';
+    this.dumpBtn.type = 'button';
+    this.dumpBtn.title = 'Copy assembly JSON';
+    this.dumpBtn.setAttribute('aria-label', 'Copy assembly JSON');
+    this.dumpBtn.innerHTML = BUG_SVG;
+    this.dumpBtn.addEventListener('click', async () => {
+      const copied = await this.cbs.onDumpState();
+      this.setDumpStatus(copied);
+    });
+    footer.appendChild(this.dumpBtn);
+    sidebar.appendChild(footer);
+
     this.selectedTrash = this.makeOverlayTrash(viewport, () => this.cbs.onRemoveSelected());
     this.hoveredTrash = this.makeOverlayTrash(viewport, () => this.cbs.onRemoveHovered());
 
@@ -80,6 +101,17 @@ export class UI {
     btn.addEventListener('click', onClick);
     viewport.appendChild(btn);
     return btn;
+  }
+
+  private setDumpStatus(copied: boolean): void {
+    window.clearTimeout(this.dumpStatusTimer);
+    this.dumpBtn.classList.toggle('copied', copied);
+    this.dumpBtn.classList.toggle('failed', !copied);
+    this.dumpBtn.title = copied ? 'Assembly JSON copied' : 'Could not copy assembly JSON';
+    this.dumpStatusTimer = window.setTimeout(() => {
+      this.dumpBtn.classList.remove('copied', 'failed');
+      this.dumpBtn.title = 'Copy assembly JSON';
+    }, 1600);
   }
 
   private makeTypeButton(type: PanelType, active: boolean): HTMLButtonElement {

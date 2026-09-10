@@ -120,6 +120,43 @@ html, body, #app {
   cursor: pointer;
 }
 
+.sidebar-footer {
+  width: 100%;
+  margin-top: auto;
+  box-sizing: border-box;
+  padding-left: 12px;
+}
+
+.dump-state-btn {
+  width: 40px;
+  height: 40px;
+  border: 1px solid #c3c9d1;
+  border-radius: 8px;
+  background: #fff;
+  color: #556;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.dump-state-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.dump-state-btn.copied {
+  border-color: #22c55e;
+  background: #f0fdf4;
+  color: #16a34a;
+}
+
+.dump-state-btn.failed {
+  border-color: #ef4444;
+  background: #fef2f2;
+  color: #dc2626;
+}
+
 #viewport {
   position: relative;
   flex: 1;
