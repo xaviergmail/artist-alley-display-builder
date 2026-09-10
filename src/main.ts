@@ -5,7 +5,7 @@ import {
   World,
   panelCenter,
   panelKey,
-  panelMaxCorner,
+  type AssemblyState,
   type Placement,
 } from './model';
 import { SceneCtx, loadPanelAssets, connectorAnchors } from './scene';
@@ -16,13 +16,32 @@ const sidebar = document.getElementById('sidebar');
 if (!viewport || !sidebar) throw new Error('missing #viewport/#sidebar');
 const viewportEl: HTMLElement = viewport;
 
+const SHARE_PARAM = 'assembly';
+
+function restoreFromUrl(target: World): boolean {
+  const raw = new URL(window.location.href).searchParams.get(SHARE_PARAM);
+  if (!raw) return false;
+  try {
+    return target.restore(JSON.parse(raw) as AssemblyState);
+  } catch {
+    return false;
+  }
+}
+
+function syncUrl(target: World): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set(SHARE_PARAM, JSON.stringify(target.toJSON()));
+  history.replaceState(null, '', url);
+}
+
 const world = new World();
 world.types.set('plain', { id: 'plain', kind: 'plain', color: '#000000', custom: false });
 world.types.set('grid', { id: 'grid', kind: 'grid', color: '#000000', custom: false });
 world.types.set('outline', { id: 'outline', kind: 'outline', color: '#000000', custom: false });
-
+restoreFromUrl(world);
 const sceneCtx = new SceneCtx(viewport);
 const canvas = sceneCtx.renderer.domElement;
+sceneCtx.setTableLength(world.tableLength);
 canvas.style.touchAction = 'none';
 
 // ---------------------------------------------------------------- picking
@@ -283,6 +302,8 @@ function refresh(): void {
   sceneCtx.rebuild(world);
   ui.updateTypes(world.types, world.activeTypeId);
   ui.setTableActive(world.tableLength);
+  ui.setAssemblyCounts(world.types, world.panels, world.connectors.size);
+  syncUrl(world);
   renderFrame();
 }
 
@@ -367,22 +388,21 @@ const ui = new UI(sidebar, viewport, {
     updateHover(lastMouse.x, lastMouse.y);
   },
   onAddCustom: (color) => {
-    world.addCustomType(color);
+    const type = world.addCustomType(color);
+    world.activeTypeId = type.id;
     refresh();
   },
-  onRemoveType: (id) => {
-    world.removeType(id);
+  onSetTypeColor: (id, color) => {
+    world.setTypeColor(id, color);
+    refresh();
+  },
+  onRemoveType: (id, replacementId) => {
+    world.removeType(id, replacementId);
     refresh();
   },
   onRemoveSelected: () => {
     if (!world.selectedKey) return;
     world.removePanel(world.selectedKey);
-    refresh();
-  },
-  onRemoveHovered: () => {
-    if (!hoverPanelKey) return;
-    world.removePanel(hoverPanelKey);
-    hoverPanelKey = null;
     refresh();
   },
   onTableSelect: (len) => {
@@ -392,6 +412,13 @@ const ui = new UI(sidebar, viewport, {
     refresh();
   },
   onDumpState: () => copyAssemblyJson(),
+});
+
+window.addEventListener('popstate', () => {
+  if (!restoreFromUrl(world)) return;
+  sceneCtx.setTableLength(world.tableLength);
+  clearHover();
+  refresh();
 });
 
 // ---------------------------------------------------------------- events
@@ -479,15 +506,7 @@ function updateOverlays(): void {
     ui.setSelectedTrash({ x: 0, y: 0, visible: false });
   }
 
-  const hovered = hoverPanelKey ? world.panel(hoverPanelKey) : undefined;
-  const hoveredType = hovered ? world.types.get(hovered.typeId) : undefined;
-  if (hovered && hoveredType?.custom && world.selectedKey !== panelKey(hovered)) {
-    const c = panelMaxCorner(hovered);
-    sceneCtx.projectToScreen(c, screenPos, viewportEl);
-    ui.setHoveredTrash(screenPos);
-  } else {
-    ui.setHoveredTrash({ x: 0, y: 0, visible: false });
-  }
+
 }
 
 // Headless/hidden pages never tick requestAnimationFrame, so render on demand:
@@ -531,13 +550,8 @@ function debugInfo(): {
 
  (window as unknown as Record<string, unknown>).__builder = { world, sceneCtx, debug: { info: debugInfo, raycaster, ndc, setNdc, updateHover, get anchors() { return connectorAnchors; } } };
 
-// Swap procedural fallback panels for the Blender models once loaded, and
-// align the default sidebar swatches with the actual model materials.
-loadPanelAssets().then((colors) => {
-  if (!colors) return;
-  for (const t of world.types.values()) {
-    if (!t.custom && colors[t.kind]) t.color = colors[t.kind];
-  }
-  refresh();
-});
+// Swap procedural fallback panels for the Blender models once loaded. Material
+// colors never write back into World: panel-type colors are user state and may
+// have been restored from a share URL before this promise settles.
+loadPanelAssets().then(() => refresh());
 refresh();

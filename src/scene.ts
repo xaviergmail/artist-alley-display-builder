@@ -172,10 +172,10 @@ function buildPanelContent(type: PanelType, ghost: boolean, invalid = false): TH
   } else {
     const asset = panelAssets?.[type.kind];
     if (asset) {
-      // Default types keep their Blender materials verbatim; custom plain
-      // types recolor every material group with the picked color.
+      // Plain panel colors are assembly state, including the default black
+      // type. Grid and outline retain their authored material treatment.
       const mats = asset.materials.map((m) => (m as THREE.MeshStandardMaterial).clone());
-      if (type.custom && type.kind === 'plain') for (const m of mats) m.color.set(type.color);
+      if (type.kind === 'plain') for (const m of mats) m.color.set(type.color);
       g.add(new THREE.Mesh(asset.geometry.clone(), mats));
     } else {
       // Fallback while the model loads (or if it failed): procedural boxes.
@@ -326,8 +326,30 @@ export class SceneCtx {
         this.tableGroup.add(leg);
       }
     }
+    this.addChair(len);
     this.controls.target.set(len / 2, 12, 0);
     this.camera.position.set(len / 2 + 70, 65, 110);
+  }
+
+  private addChair(tableLength: number): void {
+    const chair = new THREE.Group();
+    chair.name = 'artist-chair';
+    chair.position.set(tableLength / 2, 0, -(TABLE_DEPTH / 2 + 9));
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.5, metalness: 0.45 });
+    const seatMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.82, metalness: 0.02 });
+    const add = (geometry: THREE.BufferGeometry, material: THREE.Material, x: number, y: number, z: number) => {
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(x, y, z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      chair.add(mesh);
+    };
+    add(new THREE.BoxGeometry(17, 2, 17), seatMat, 0, FLOOR_Y + 14, 0);
+    for (const x of [-7, 7]) for (const z of [-7, 7]) {
+      add(new THREE.BoxGeometry(1.4, 14, 1.4), frameMat, x, FLOOR_Y + 7, z);
+    }
+    add(new THREE.BoxGeometry(17, 18, 1.6), seatMat, 0, FLOOR_Y + 23, -7);
+    this.tableGroup.add(chair);
   }
 
   rebuild(world: World): void {

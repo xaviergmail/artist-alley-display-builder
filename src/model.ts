@@ -242,6 +242,11 @@ export class World {
     if (panel) panel.typeId = typeId;
   }
 
+  setTypeColor(id: string, color: string): void {
+    const type = this.types.get(id);
+    if (type?.kind === 'plain') type.color = color;
+  }
+
   addCustomType(color: string): PanelType {
     const t: PanelType = { id: `custom-${this.nextCustomType++}`, kind: 'plain', color, custom: true };
     this.types.set(t.id, t);
@@ -249,13 +254,19 @@ export class World {
     return t;
   }
 
-  removeType(id: string): void {
+  removeType(id: string, replacementId: string | null): void {
     if (!this.types.get(id)?.custom) return; // the 3 default types cannot be removed
-    this.types.delete(id);
-    for (const key of [...this.panels.keys()]) {
-      if (this.panels.get(key)!.typeId === id) this.removePanel(key);
+    if (replacementId && replacementId !== id && this.types.has(replacementId)) {
+      for (const panel of this.panels.values()) {
+        if (panel.typeId === id) panel.typeId = replacementId;
+      }
+    } else {
+      for (const key of [...this.panels.keys()]) {
+        if (this.panels.get(key)!.typeId === id) this.removePanel(key);
+      }
     }
-    if (this.activeTypeId === id) this.activeTypeId = 'plain';
+    this.types.delete(id);
+    if (this.activeTypeId === id) this.activeTypeId = replacementId && this.types.has(replacementId) ? replacementId : 'plain';
   }
 
   // Stable, plain-data representation for clipboard export and diagnostics.
@@ -275,6 +286,65 @@ export class World {
         sign: connector.sign,
       })),
     };
+  }
+
+  // Restore a shared URL snapshot. Connectors are derived from the panel set
+  // so a stale or hand-edited connector list cannot corrupt the assembly.
+  restore(state: AssemblyState): boolean {
+    if (
+      state?.version !== 1
+      || !Number.isFinite(state.tableLength) || state.tableLength <= 0
+      || !Array.isArray(state.types) || !Array.isArray(state.panels)
+    ) return false;
+
+    const types = new Map<string, PanelType>();
+    for (const type of state.types) {
+      if (
+        !type || typeof type.id !== 'string' || !['plain', 'grid', 'outline'].includes(type.kind)
+        || typeof type.color !== 'string' || typeof type.custom !== 'boolean' || types.has(type.id)
+      ) return false;
+      types.set(type.id, { ...type });
+    }
+    if (!types.has('plain') || !types.has('grid') || !types.has('outline')) return false;
+
+    const panels = new Map<string, Panel>();
+    let maxPanelId = 0;
+    for (const panel of state.panels) {
+      if (
+        !panel || !['x', 'y', 'z'].includes(panel.plane)
+        || !Number.isInteger(panel.i) || !Number.isInteger(panel.j) || !Number.isInteger(panel.k)
+        || !Number.isInteger(panel.id) || !types.has(panel.typeId)
+      ) return false;
+      const key = panelKey(panel);
+      if (panels.has(key)) return false;
+      panels.set(key, { ...panel });
+      maxPanelId = Math.max(maxPanelId, panel.id);
+    }
+
+    this.types = types;
+    this.panels = panels;
+    this.connectors = new Map();
+    this.tableLength = state.tableLength;
+    this.activeTypeId = types.has(state.activeTypeId) ? state.activeTypeId : 'plain';
+    this.selectedKey = state.selectedKey && panels.has(state.selectedKey) ? state.selectedKey : null;
+    this.nextPanelId = maxPanelId + 1;
+    this.nextCustomType = Math.max(
+      1,
+      ...[...types.keys()].flatMap((id) => {
+        const match = /^custom-(\d+)$/.exec(id);
+        return match ? [Number(match[1]) + 1] : [];
+      }),
+    );
+
+    const corners = new Map<string, Corner>();
+    for (const panel of panels.values()) {
+      for (const corner of panelCorners(panel)) corners.set(pointKey(corner), corner);
+    }
+    for (const [key, corner] of corners) {
+      const here = this.panelsAt(corner);
+      if (cornerNeedsConnector(here)) this.connectors.set(key, chooseOrientation(here, corner));
+    }
+    return true;
   }
 
   // All empty squares connectable to some placed panel corner.

@@ -184,42 +184,59 @@ test('clicking a sidebar type re-types the selected panel', async ({ page }) => 
   expect(panels[0].typeId).toBe('grid');
 });
 
-test('adding a custom panel type creates a removable sidebar entry', async ({ page }) => {
+test('web color picker creates a custom type immediately', async ({ page }) => {
   await page.locator('#sidebar .add-btn').click();
-  await page.locator('.custom-add input[type=color]').fill('#e74c3c');
-  await page.locator('.custom-add button').click();
+  await expect(page.locator('.picker-dialog[open]')).toBeVisible();
+  await page.locator('.palette-swatch[title="#e74c3c"]').click();
 
   expect((await builder(page)).world.activeTypeId).toBe('custom-1');
-  const customs = await page.locator('.type-btn.custom').count();
+  const customs = await page.locator('.type-entry.custom').count();
   expect(customs).toBe(1);
-  // custom type carries a remove button, defaults still do not
-  expect(await page.locator('.type-btn.custom .icon-trash').count()).toBe(1);
-  expect(await page.locator('.type-btn:not(.custom) .icon-trash').count()).toBe(0);
-
-  await page.locator('.type-btn.custom .icon-trash').click();
-  const types = await page.evaluate(() => [...(window as unknown as { __builder: Builder }).__builder.world.types.keys()]);
-  expect(types).toEqual(['plain', 'grid', 'outline']);
-  expect((await builder(page)).world.activeTypeId).toBe('plain');
+  expect(await page.locator('.type-entry.custom .icon-trash').count()).toBe(1);
+  expect(await page.locator('.type-entry:not(.custom) .icon-trash').count()).toBe(0);
 });
 
-test('hovering a placed custom panel shows its top-right trash', async ({ page }) => {
-  await page.locator('#sidebar .add-btn').click();
-  await page.locator('.custom-add button').click();
+test('web color picker recolors default plain state', async ({ page }) => {
+  await page.locator('.type-btn[data-type-id="plain"]').locator('..').locator('.type-color-btn').click();
+  await page.locator('.palette-swatch[title="#3b82f6"]').click();
+  const state = await page.evaluate(() => (window as unknown as { __builder: Builder }).__builder.world.toJSON());
+  expect(state.types.find((type) => type.id === 'plain')?.color).toBe('#3b82f6');
+});
 
+test('custom type deletion migrates its placed panels to the selected type', async ({ page }) => {
+  await page.locator('#sidebar .add-btn').click();
+  await page.locator('.palette-swatch[title="#e74c3c"]').click();
+  const box = await canvasBox(page);
+  await page.mouse.click(box.x + box.width * 0.42, box.y + box.height * 0.55);
+  await page.locator('.type-entry.custom').hover();
+  await page.locator('.type-entry.custom .icon-trash').click();
+  await expect(page.locator('.replacement-dialog[open]')).toBeVisible();
+  await page.locator('.replacement-dialog').getByRole('button', { name: 'plain' }).click();
+
+  const b = await builder(page);
+  expect(b.world.types.has('custom-1')).toBe(false);
+  expect([...b.world.panels.values()][0].typeId).toBe('plain');
+});
+
+test('red X removal discards panels of the deleted custom type', async ({ page }) => {
+  await page.locator('#sidebar .add-btn').click();
+  await page.locator('.palette-swatch[title="#22c55e"]').click();
+  const box = await canvasBox(page);
+  await page.mouse.click(box.x + box.width * 0.42, box.y + box.height * 0.55);
+  await page.locator('.type-entry.custom').hover();
+  await page.locator('.type-entry.custom .icon-trash').click();
+  await page.locator('.replacement-discard').click();
+  expect((await builder(page)).world.panels.size).toBe(0);
+});
+
+test('hovering a placed custom panel does not show a 3D delete affordance', async ({ page }) => {
+  await page.locator('#sidebar .add-btn').click();
+  await page.locator('.palette-swatch[title="#e74c3c"]').click();
   const box = await canvasBox(page);
   await page.mouse.move(box.x + box.width * 0.42, box.y + box.height * 0.55, { steps: 3 });
-  await page.mouse.down({ button: 'left' });
-  await page.mouse.up({ button: 'left' }); // place custom panel
+  await page.mouse.click(box.x + box.width * 0.42, box.y + box.height * 0.55);
   await page.waitForTimeout(150);
-  await page.mouse.move(box.x + box.width * 0.42, box.y + box.height * 0.55, { steps: 3 });
-  await page.waitForTimeout(200);
-
-  const info = await page.evaluate(() => {
-    const b = (window as unknown as { __builder: Builder }).__builder;
-    const trash = document.querySelector('.overlay-btn.visible');
-    return { selected: b.world.selectedKey, hoverTrash: !!trash };
-  });
-  expect(info.hoverTrash).toBe(true);
+  expect(await page.locator('.overlay-btn.visible').count()).toBe(0);
 });
 
 test('right-drag orbits the camera', async ({ page }) => {
@@ -280,6 +297,36 @@ test('table size selector changes table length and camera target', async ({ page
   const target = await page.evaluate(() => (window as unknown as { __builder: Builder }).__builder.sceneCtx.controls.target.toArray());
   expect(target[0]).toBe(48); // center of the 8 ft table
   await expect(page.locator('#table-selector button[data-len="96"]')).toHaveClass(/active/);
+});
+
+test('count bar reports every panel type and connector total', async ({ page }) => {
+  const box = await canvasBox(page);
+  await page.mouse.click(box.x + box.width * 0.42, box.y + box.height * 0.55);
+  await expect.poll(() => page.locator('#count-bar .count-item strong').allTextContents()).toEqual(['1', '0', '0', '4']);
+});
+
+test('share URL restores recolored panel state', async ({ page }) => {
+  await page.locator('.type-entry:has(.type-btn[data-type-id="plain"]) .type-color-btn').click();
+  await page.locator('.palette-swatch[title="#3b82f6"]').click();
+  const box = await canvasBox(page);
+  await page.mouse.click(box.x + box.width * 0.42, box.y + box.height * 0.55);
+  const url = page.url();
+  expect(new URL(url).searchParams.has('assembly')).toBe(true);
+
+  await page.goto(url);
+  const state = await page.evaluate(() => (window as unknown as { __builder: Builder }).__builder.world.toJSON());
+  expect(state.types.find((type) => type.id === 'plain')?.color).toBe('#3b82f6');
+  expect(state.panels).toHaveLength(1);
+  expect(state.panels[0].typeId).toBe('plain');
+});
+
+test('table includes a centered visual-only artist chair', async ({ page }) => {
+  const chair = await page.evaluate(() => {
+    const b = (window as unknown as { __builder: Builder }).__builder;
+    const object = b.sceneCtx.tableGroup.getObjectByName('artist-chair');
+    return object ? { position: object.position.toArray(), children: object.children.length } : null;
+  });
+  expect(chair).toMatchObject({ position: [36, 0, -21], children: 6 });
 });
 
 test('perpendicular placement shares a corner and serves both panel planes', async ({ page }) => {
