@@ -639,7 +639,7 @@ const ui = new UI(sidebar, viewport, {
     world.selectedKey = null;
     clearHover();
     clearNormalCandidates();
-    renderFrame();
+    refresh();
   },
   onSaveNamed: (name) => saveDesign(name),
   onLoadNamed: (name) => loadDesign(name),
