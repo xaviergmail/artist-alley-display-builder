@@ -255,12 +255,13 @@ function showNormalCandidates(candidates: NormalCandidate[]): void {
 }
 
 function candidatesForPanel(panel: Placement): NormalCandidate[] {
+  // Normal mode mirrors quick build: only squares sharing a real edge with a
+  // placed panel (coplanar continuation or perpendicular along that edge).
+  // Corner-only diagonals stay placeable elsewhere but are never previewed.
   const corners = new Set(panelCorners(panel).map(pointKey));
   return world.candidates().flatMap((candidate) => {
     if (!panelCorners(candidate).some((corner) => corners.has(pointKey(corner)))) return [];
-    const attached = [panel, ...world.panels.values()];
-    const anchor = attached.find((placed) => sharedPanelEdge(candidate, placed))
-      ?? attached.find((placed) => panelCorners(candidate).some((corner) => panelCorners(placed).some((other) => pointKey(corner) === pointKey(other))));
+    const anchor = [panel, ...world.panels.values()].find((placed) => sharedPanelEdge(candidate, placed));
     return anchor ? [{ placement: candidate, anchor }] : [];
   });
 }

@@ -433,7 +433,7 @@ test('normal mode places a table panel in one click', async ({ page }) => {
   expect(state.connectors).toEqual(expect.arrayContaining([expect.objectContaining({ plane: 'y', sign: 1, turn: 2 })]));
 });
 
-test('normal mode renders stable edge and corner-pressed ghosts for every legal contact', async ({ page }) => {
+test('normal mode previews only edge-connected placements, never corner diagonals', async ({ page }) => {
   await page.locator('.quick-mode-btn').click();
   await clickProjected(page, 'b.sceneCtx.tableTop');
   await clickProjected(page, 'b.sceneCtx.panelGroup.children[0]');
@@ -468,9 +468,7 @@ test('normal mode renders stable edge and corner-pressed ghosts for every legal 
   expect(before.selected).not.toBeNull();
   expect(before.selectionVisible).toBe(false);
   expect(before.scales.every((scale: number[]) => scale.every((value) => value === 0.5))).toBe(true);
-  expect(before.contactCounts.every((count: number) => count === 1 || count === 2)).toBe(true);
-  expect(before.contactCounts).toContain(1);
-  expect(before.contactCounts).toContain(2);
+  expect(before.contactCounts.every((count: number) => count === 2)).toBe(true);
   expect(after).toEqual(before.positions);
 });
 
