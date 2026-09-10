@@ -211,13 +211,23 @@ function createContactOcclusionTexture(): THREE.CanvasTexture {
   context.fillRect(0, 0, 256, 256);
   return new THREE.CanvasTexture(canvas);
 }
+// Geometries (and the few cached materials) reused by every panel/connector
+// mesh. Rebuilds must never clone or dispose these: cloning the ~50k-triangle
+// GLB panel per placement was the source of the add/remove lag spikes.
+const sharedGeometries = new WeakSet<THREE.BufferGeometry>();
+
+function shareGeometry<T extends THREE.BufferGeometry>(geometry: T): T {
+  sharedGeometries.add(geometry);
+  return geometry;
+}
+
 
 const CONTACT_OCCLUSION = createContactOcclusionTexture();
 
 function disposeObject(obj: THREE.Object3D): void {
   obj.traverse((o) => {
     if (o instanceof THREE.Mesh) {
-      o.geometry.dispose();
+      if (!sharedGeometries.has(o.geometry)) o.geometry.dispose();
       const materials = Array.isArray(o.material) ? o.material : [o.material];
       for (const material of materials) {
         if (!material.userData[SHARED_MATERIAL]) material.dispose();
@@ -225,6 +235,23 @@ function disposeObject(obj: THREE.Object3D): void {
     }
   });
 }
+
+const HIT_GEO = shareGeometry(new THREE.BoxGeometry(STEP + 0.4, THICK + 0.9, STEP + 0.4));
+const GHOST_PANEL_GEO = shareGeometry(new THREE.BoxGeometry(STEP, THICK, STEP));
+const GHOST_CUBE_GEO = shareGeometry(new THREE.BoxGeometry(1.5, 1.5, 1.5));
+const GHOST_MATS: Record<'ok' | 'bad', THREE.MeshBasicMaterial> = {
+  ok: new THREE.MeshBasicMaterial({ color: GHOST, transparent: true, opacity: 0.35, depthWrite: false }),
+  bad: new THREE.MeshBasicMaterial({ color: GHOST_BAD, transparent: true, opacity: 0.35, depthWrite: false }),
+};
+for (const material of [...Object.values(GHOST_MATS)]) material.userData[SHARED_MATERIAL] = true;
+const HIT_MAT = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+HIT_MAT.userData[SHARED_MATERIAL] = true;
+const GHOST_CONNECTOR_MATS: Record<'ok' | 'bad', THREE.MeshBasicMaterial> = {
+  ok: new THREE.MeshBasicMaterial({ color: GHOST, transparent: true, opacity: 0.45, depthWrite: false }),
+  bad: new THREE.MeshBasicMaterial({ color: GHOST_BAD, transparent: true, opacity: 0.45, depthWrite: false }),
+};
+for (const material of Object.values(GHOST_CONNECTOR_MATS)) material.userData[SHARED_MATERIAL] = true;
+
 
 function clearGroup(group: THREE.Group): void {
   for (const child of [...group.children]) {
@@ -234,10 +261,10 @@ function clearGroup(group: THREE.Group): void {
 }
 
 function ghostMaterial(invalid = false): THREE.MeshBasicMaterial {
-  return new THREE.MeshBasicMaterial({ color: invalid ? GHOST_BAD : GHOST, transparent: true, opacity: 0.35, depthWrite: false });
+  return invalid ? GHOST_MATS.bad : GHOST_MATS.ok;
 }
 function hitMaterial(): THREE.MeshBasicMaterial {
-  return new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+  return HIT_MAT;
 }
 
 function panelMaterial(source: THREE.Material, type: PanelType): THREE.Material {
@@ -250,25 +277,25 @@ function panelMaterial(source: THREE.Material, type: PanelType): THREE.Material 
 function buildPanelContent(type: PanelType, ghost: boolean, invalid = false, metalColor = '#2f3945'): THREE.Group {
   const g = new THREE.Group();
   if (ghost) {
-    g.add(new THREE.Mesh(new THREE.BoxGeometry(STEP, THICK, STEP), ghostMaterial(invalid)));
+    g.add(new THREE.Mesh(GHOST_PANEL_GEO, ghostMaterial(invalid)));
   } else {
     const asset = panelAssets?.[type.kind];
     if (asset) {
       // Named GLB materials are shared across the assembly. Only custom
       // panel types need an isolated Panel clone to retain their own color.
-      const mesh = new THREE.Mesh(asset.geometry.clone(), asset.materials.map((material) => panelMaterial(material, type)));
+      const mesh = new THREE.Mesh(asset.geometry, asset.materials.map((material) => panelMaterial(material, type)));
       mesh.castShadow = false;
       g.add(mesh);
     } else {
       // Fallback while the model loads (or if it failed): procedural boxes.
       g.add(new THREE.Mesh(
-        new THREE.BoxGeometry(STEP, THICK, STEP),
+        GHOST_PANEL_GEO,
         new THREE.MeshStandardMaterial({ color: type.kind === 'plain' ? type.color : metalColor, roughness: 0.55, metalness: 0.05 }),
       ));
     }
   }
   // Uniform clickbox for every panel kind, matching the solid panel footprint.
-  const hit = new THREE.Mesh(new THREE.BoxGeometry(STEP + 0.4, THICK + 0.9, STEP + 0.4), hitMaterial());
+  const hit = new THREE.Mesh(HIT_GEO, hitMaterial());
   g.add(hit);
   return g;
 }
@@ -303,9 +330,9 @@ function buildConnector(
   const g = new THREE.Group();
   if (connectorAsset) {
     const material = ghost
-      ? new THREE.MeshBasicMaterial({ color: invalid ? GHOST_BAD : GHOST, transparent: true, opacity: 0.45, depthWrite: false })
+      ? (invalid ? GHOST_CONNECTOR_MATS.bad : GHOST_CONNECTOR_MATS.ok)
       : modelMaterials?.connector ?? connectorAsset.materials[0];
-    const mesh = new THREE.Mesh(connectorAsset.geometry.clone(), material);
+    const mesh = new THREE.Mesh(shareGeometry(connectorAsset.geometry), material);
     mesh.quaternion.copy(ORIENT_QUATS[`${conn.plane}${conn.sign}`]);
     if (conn.turn) mesh.rotateY(conn.turn * Math.PI / 2);
     mesh.castShadow = false;
@@ -313,9 +340,9 @@ function buildConnector(
   } else {
     // Fallback while the model loads: small dark cube at the hub.
     g.add(new THREE.Mesh(
-      new THREE.BoxGeometry(1.5, 1.5, 1.5),
+      GHOST_CUBE_GEO,
       ghost
-        ? new THREE.MeshBasicMaterial({ color: invalid ? GHOST_BAD : GHOST, transparent: true, opacity: 0.45, depthWrite: false })
+        ? (invalid ? GHOST_CONNECTOR_MATS.bad : GHOST_CONNECTOR_MATS.ok)
         : new THREE.MeshStandardMaterial({ color: connectorColor, roughness: 0.5, metalness: 0.4 }),
     ));
   }
