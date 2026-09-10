@@ -480,11 +480,12 @@ test('vertical connector points face centre or use table-safe fallbacks after re
     return { before, after: b.world.connectors.get('6,1,0') };
   });
 
-  // x-plate hubs at z = 0 cannot rotate toward the centre: they point up on
-  // the table (turn 3) and down above it (turn 1), including after removal.
-  expect(orientation.before.table).toMatchObject({ plane: 'x', sign: 1, turn: 3 });
-  expect(orientation.before.aboveTable).toMatchObject({ plane: 'x', sign: 1, turn: 1 });
-  expect(orientation.after).toMatchObject({ plane: 'x', sign: 1, turn: 1 });
+  // At the table the flat plate stays down and the pointy cross-side is up.
+  // Above the table, x = 6 can face the centre at x = 3 through x-sign -1;
+  // removal preserves that required structural orientation.
+  expect(orientation.before.table).toMatchObject({ plane: 'y', sign: 1, turn: 0 });
+  expect(orientation.before.aboveTable).toMatchObject({ plane: 'x', sign: -1, turn: 0 });
+  expect(orientation.after).toMatchObject({ plane: 'x', sign: -1, turn: 0 });
 });
 
 test('switching build modes deselects the active panel', async ({ page }) => {

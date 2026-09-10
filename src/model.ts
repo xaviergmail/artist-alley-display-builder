@@ -32,8 +32,8 @@ export type Corner = [number, number, number];
 export interface Connector {
   plane: Plane;
   sign: 1 | -1;
-  // Quarter turns around the connector plate normal. The asymmetric point
-  // faces the table centre whenever that rotation is structurally possible.
+  // Cosmetic quarter-turn around the cross-side axis. Pointy-side direction
+  // is determined structurally by plane and sign.
   turn?: 0 | 1 | 2 | 3;
 }
 
@@ -139,51 +139,41 @@ export function cornerNeedsConnector(panels: Placement[], c: Corner): boolean {
   return panels.length > 0 && (panels.length >= 2 || c[1] === 0);
 }
 
-// Direction of the connector asset's asymmetric "pointy" side for each
-// authored quarter-turn. The values mirror ORIENT_QUATS in scene.ts without
-// coupling the lattice model to Three.js.
-function pointyDirections(conn: Pick<Connector, 'plane' | 'sign'>): Corner[] {
-  if (conn.plane === 'y') {
-    return conn.sign === 1
-      ? [[0, 0, 1], [1, 0, 0], [0, 0, -1], [-1, 0, 0]]
-      : [[0, 0, -1], [1, 0, 0], [0, 0, 1], [-1, 0, 0]];
-  }
-  if (conn.plane === 'x') {
-    return conn.sign === 1
-      ? [[0, 0, 1], [0, -1, 0], [0, 0, -1], [0, 1, 0]]
-      : [[0, 0, 1], [0, 1, 0], [0, 0, -1], [0, -1, 0]];
-  }
-  return conn.sign === 1
-    ? [[0, -1, 0], [1, 0, 0], [0, 1, 0], [-1, 0, 0]]
-    : [[0, 1, 0], [1, 0, 0], [0, -1, 0], [-1, 0, 0]];
+// The connector's pointed/domed side is its cross-side structure. Scene
+// orientation maps the model's local +Y onto this signed plate normal.
+function pointyDirection(conn: Pick<Connector, 'plane' | 'sign'>): Corner {
+  if (conn.plane === 'x') return [conn.sign, 0, 0];
+  if (conn.plane === 'y') return [0, conn.sign, 0];
+  return [0, 0, conn.sign];
 }
 
-// Prefer a rotation toward the centre of the table. A vertical plate can
-// only turn its point toward one horizontal axis; when that axis cannot
-// advance toward centre, the point faces down — except at the table, where
-// it must face up.
-function connectorTurn(c: Corner, conn: Pick<Connector, 'plane' | 'sign'>, tableLength: number): 0 | 1 | 2 | 3 {
-  const [x, , z] = c;
-  const towardCentre: Corner = [tableLength / 2 - x * STEP, 0, -z * STEP];
-  const directions = pointyDirections(conn);
-  let turn: 0 | 1 | 2 | 3 | null = null;
+// Preserve the authored chair-facing turn for a free horizontal deck hub.
+// This does not control the pointy side; plane/sign do.
+function connectorTurn(panels: Placement[], conn: Pick<Connector, 'plane'>): 0 | 1 | 2 | 3 {
+  return conn.plane === 'y' && panels.every((panel) => panel.plane === 'y') ? 2 : 0;
+}
+
+function centreFacingOrientation(
+  valid: Connector[],
+  c: Corner,
+  tableLength: number,
+  anchorPlane: Plane,
+): Connector | undefined {
+  const towardCentre: Corner = [tableLength / 2 - c[0] * STEP, 0, -c[2] * STEP];
+  let chosen: Connector | undefined;
   let bestScore = 0;
-  for (let index = 0; index < directions.length; index += 1) {
-    const direction = directions[index]!;
-    if (direction[1] !== 0) continue;
+  for (const candidate of valid) {
+    const direction = pointyDirection(candidate);
     const score = direction[0] * towardCentre[0] + direction[2] * towardCentre[2];
-    if (score > bestScore) {
+    if (
+      score > bestScore
+      || (score === bestScore && score > 0 && candidate.plane === anchorPlane && chosen?.plane !== anchorPlane)
+    ) {
       bestScore = score;
-      turn = index as 0 | 1 | 2 | 3;
+      chosen = candidate;
     }
   }
-  if (turn !== null) return turn;
-
-  const fallback: Corner = c[1] === 0 ? [0, 1, 0] : [0, -1, 0];
-  const fallbackTurn = directions.findIndex((direction) =>
-    direction[0] === fallback[0] && direction[1] === fallback[1] && direction[2] === fallback[2],
-  );
-  return fallbackTurn === -1 ? 0 : fallbackTurn as 0 | 1 | 2 | 3;
+  return chosen;
 }
 
 export function chooseOrientation(panels: Placement[], c: Corner, tableLength = 72): Connector {
@@ -203,19 +193,25 @@ export function chooseOrientation(panels: Placement[], c: Corner, tableLength = 
         }
       }
     }
-    return { ...best, turn: connectorTurn(c, best, tableLength) };
+    return { ...best, turn: connectorTurn(panels, best) };
   }
 
   const anchorPlane = panels[0].plane;
-  const hasTableDeck = panels.some((p) => p.plane === 'y' && p.j === 0);
+  const up = valid.find((candidate) => candidate.plane === 'y' && candidate.sign === 1);
+  const down = valid.find((candidate) => candidate.plane === 'y' && candidate.sign === -1);
   const chosen =
-    // A deck panel touching the table keeps the connector plate horizontal,
-    // with its cross-side structure pointing up.
-    (hasTableDeck ? valid.find((v) => v.plane === 'y' && v.sign === 1) : undefined) ??
-    valid.find((v) => v.plane === anchorPlane && v.sign === 1) ??
-    valid.find((v) => v.plane === anchorPlane) ??
+    // A table-contact hub must retain a horizontal plate and point up so the
+    // connector's flat side rests on the table.
+    (c[1] === 0 ? up : undefined) ??
+    centreFacingOrientation(valid, c, tableLength, anchorPlane) ??
+    // When centre-facing is structurally unavailable, prefer down; only an
+    // unavoidably non-vertical connection falls through to the anchor plane.
+    down ??
+    up ??
+    valid.find((candidate) => candidate.plane === anchorPlane && candidate.sign === 1) ??
+    valid.find((candidate) => candidate.plane === anchorPlane) ??
     valid[0];
-  return { ...chosen, turn: connectorTurn(c, chosen, tableLength) };
+  return { ...chosen, turn: connectorTurn(panels, chosen) };
 }
 
 export class World {
