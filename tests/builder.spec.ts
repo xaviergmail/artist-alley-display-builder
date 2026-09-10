@@ -431,19 +431,43 @@ test('normal mode places a table panel in one click', async ({ page }) => {
   expect(state.connectors).toEqual(expect.arrayContaining([expect.objectContaining({ plane: 'y', sign: 1, turn: 2 })]));
 });
 
-test('normal mode uses half-size edge-pressed ghosts without a blue selection helper', async ({ page }) => {
+test('normal mode renders stable, edge-pressed ghosts only for edge-sharing placements', async ({ page }) => {
   await page.locator('.quick-mode-btn').click();
   await clickProjected(page, 'b.sceneCtx.tableTop');
   await clickProjected(page, 'b.sceneCtx.panelGroup.children[0]');
-  const state = await page.evaluate(() => {
+  const before = await page.evaluate(() => {
     const b = (window as any).__builder;
-    const marker = b.sceneCtx.markerGroup.children.find((child: any) => child.position.toArray().every(Number.isFinite));
-    return { selected: b.world.selectedKey, selectionVisible: b.sceneCtx.selectionHelper.visible, scale: marker.scale.toArray(), markers: b.sceneCtx.markerGroup.children.length };
+    const corners = (p: any) => p.plane === 'x'
+      ? [[p.i, p.j, p.k], [p.i, p.j + 1, p.k], [p.i, p.j, p.k + 1], [p.i, p.j + 1, p.k + 1]]
+      : p.plane === 'y'
+        ? [[p.i, p.j, p.k], [p.i + 1, p.j, p.k], [p.i, p.j, p.k + 1], [p.i + 1, p.j, p.k + 1]]
+        : [[p.i, p.j, p.k], [p.i + 1, p.j, p.k], [p.i, p.j + 1, p.k], [p.i + 1, p.j + 1, p.k]];
+    const key = (p: any) => `${p.plane}:${p.i},${p.j},${p.k}`;
+    const candidates = [...b.world.candidates()];
+    const markers = b.sceneCtx.markerGroup.children;
+    const allAnchored = markers.every((marker: any) => {
+      const candidate = candidates.find((placement: any) => key(placement) === marker.userData.candidateKey);
+      return [...b.world.panels.values()].some((panel: any) =>
+        corners(candidate).filter((corner: number[]) => corners(panel).some((other: number[]) => corner.join(',') === other.join(','))).length === 2,
+      );
+    });
+    return {
+      selected: b.world.selectedKey,
+      selectionVisible: b.sceneCtx.selectionHelper.visible,
+      scales: markers.map((marker: any) => marker.scale.toArray()),
+      positions: Object.fromEntries(markers.map((marker: any) => [marker.userData.candidateKey, marker.position.toArray()])),
+      allAnchored,
+    };
   });
-  expect(state.selected).not.toBeNull();
-  expect(state.selectionVisible).toBe(false);
-  expect(state.scale).toEqual([0.5, 0.5, 0.5]);
-  expect(state.markers).toBeGreaterThan(0);
+  await page.locator('.type-btn[data-type-id="grid"]').click();
+  const after = await page.evaluate(() => Object.fromEntries(
+    (window as any).__builder.sceneCtx.markerGroup.children.map((marker: any) => [marker.userData.candidateKey, marker.position.toArray()]),
+  ));
+  expect(before.selected).not.toBeNull();
+  expect(before.selectionVisible).toBe(false);
+  expect(before.scales.every((scale: number[]) => scale.every((value) => value === 0.5))).toBe(true);
+  expect(before.allAnchored).toBe(true);
+  expect(after).toEqual(before.positions);
 });
 
 test('named designs restore only after explicit load confirmation', async ({ page }) => {

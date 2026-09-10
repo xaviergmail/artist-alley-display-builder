@@ -8,6 +8,7 @@ import {
   panelCorners,
   panelKey,
   pointKey,
+  sharedPanelEdge,
   type AssemblyState,
   type Placement,
 } from './model';
@@ -116,7 +117,12 @@ let rightDown: { panelKey: string | null; x: number; y: number } | null = null;
 let lastMouse: { x: number; y: number } = { x: 0, y: 0 };
 let touchGesture = false;
 const activePointers = new Map<number, { x: number; y: number; moved: boolean; type: string }>();
-const normalCandidates = new Map<string, Placement>();
+interface NormalCandidate {
+  placement: Placement;
+  anchor: Placement;
+}
+
+const normalCandidates = new Map<string, NormalCandidate>();
 
 const EDGE_ACTIVATE_PX = 45; // start showing the ghost this close to an edge
 const EDGE_EXTINGUISH_PX = 130; // ghost gone beyond this distance
@@ -215,18 +221,22 @@ function clearNormalCandidates(): void {
   sceneCtx.setCandidateGhosts([]);
 }
 
-function showNormalCandidates(candidates: Placement[], anchor?: Placement): void {
+function showNormalCandidates(candidates: NormalCandidate[]): void {
   const type = world.types.get(world.activeTypeId);
   clearNormalCandidates();
   if (!type) return;
-  for (const candidate of candidates) normalCandidates.set(panelKey(candidate), candidate);
-  sceneCtx.setCandidateGhosts([...normalCandidates.values()].map((placement) => ({ placement, type, anchor })));
+  for (const candidate of candidates) normalCandidates.set(panelKey(candidate.placement), candidate);
+  sceneCtx.setCandidateGhosts([...normalCandidates.values()].map((candidate) => ({ ...candidate, type })));
   renderFrame();
 }
 
-function candidatesForPanel(panel: Placement): Placement[] {
+function candidatesForPanel(panel: Placement): NormalCandidate[] {
   const corners = new Set(panelCorners(panel).map(pointKey));
-  return world.candidates().filter((candidate) => panelCorners(candidate).some((corner) => corners.has(pointKey(corner))));
+  return world.candidates().flatMap((candidate) => {
+    if (!panelCorners(candidate).some((corner) => corners.has(pointKey(corner)))) return [];
+    const anchor = [panel, ...world.panels.values()].find((placed) => sharedPanelEdge(candidate, placed));
+    return anchor ? [{ placement: candidate, anchor }] : [];
+  });
 }
 
 // Recompute the ghost for the remembered edge: pick the candidate square
@@ -522,7 +532,7 @@ function handleNormalTap(clientX: number, clientY: number): void {
   raycaster.setFromCamera(ndc, sceneCtx.camera);
   const candidate = normalCandidates.get(pickCandidate() ?? '');
   if (candidate) {
-    placePanelAt(candidate);
+    placePanelAt(candidate.placement);
     return;
   }
   const picked = pick();
@@ -531,7 +541,7 @@ function handleNormalTap(clientX: number, clientY: number): void {
     if (!panel) return;
     world.selectedKey = picked.panelKeyHit;
     refresh();
-    showNormalCandidates(candidatesForPanel(panel), panel);
+    showNormalCandidates(candidatesForPanel(panel));
     return;
   }
   if (picked.tablePoint) {

@@ -63,6 +63,13 @@ export function panelCorners(p: Placement): Corner[] {
   if (p.plane === 'y') return [[i, j, k], [i + 1, j, k], [i, j, k + 1], [i + 1, j, k + 1]];
   return [[i, j, k], [i + 1, j, k], [i, j + 1, k], [i + 1, j + 1, k]];
 }
+// Returns the common boundary segment when two lattice squares share an edge.
+// One shared corner is merely a diagonal connection; four means the same square.
+export function sharedPanelEdge(a: Placement, b: Placement): [Corner, Corner] | null {
+  const bCorners = new Set(panelCorners(b).map(pointKey));
+  const shared = panelCorners(a).filter((corner) => bCorners.has(pointKey(corner)));
+  return shared.length === 2 ? [shared[0], shared[1]] : null;
+}
 
 export function panelCenter(p: Placement): Corner {
   const h = STEP / 2;

@@ -6,9 +6,9 @@ import panelsUrl from '../assets/Panels.glb?url';
 import {
   STEP,
   panelCenter,
-  panelCorners,
   panelKey,
   parsePointKey,
+  sharedPanelEdge,
   type Connector,
   type PanelType,
   type Placement,
@@ -451,9 +451,8 @@ export class SceneCtx {
       placePanel(obj, candidate.placement);
       obj.scale.setScalar(0.5);
       if (candidate.anchor) {
-        const anchorCorners = new Set(panelCorners(candidate.anchor).map((corner) => corner.join(',')));
-        const shared = panelCorners(candidate.placement).filter((corner) => anchorCorners.has(corner.join(',')));
-        if (shared.length === 2) {
+        const shared = sharedPanelEdge(candidate.placement, candidate.anchor);
+        if (shared) {
           const center = panelCenter(candidate.placement);
           const edgeMidpoint = [0, 1, 2].map((axis) => (shared[0][axis] + shared[1][axis]) * STEP / 2) as [number, number, number];
           obj.position.set(
