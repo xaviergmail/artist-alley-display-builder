@@ -20,7 +20,7 @@ const TABLE_OPTIONS: Array<[number, string]> = [
   [36, '3 ft'],
   [48, '4 ft'],
   [72, '6 ft'],
-  [108, '9 ft'],
+  [96, '8 ft'],
 ];
 
 export class UI {

@@ -251,12 +251,12 @@ test('ghost is hidden while the camera is being dragged', async ({ page }) => {
 });
 
 test('table size selector changes table length and camera target', async ({ page }) => {
-  await page.locator('#table-selector button[data-len="108"]').click();
+  await page.locator('#table-selector button[data-len="96"]').click();
   const b = await builder(page);
-  expect(b.world.tableLength).toBe(108);
+  expect(b.world.tableLength).toBe(96);
   const target = await page.evaluate(() => (window as unknown as { __builder: Builder }).__builder.sceneCtx.controls.target.toArray());
-  expect(target[0]).toBe(54); // center of the 9 ft table
-  await expect(page.locator('#table-selector button[data-len="108"]')).toHaveClass(/active/);
+  expect(target[0]).toBe(48); // center of the 8 ft table
+  await expect(page.locator('#table-selector button[data-len="96"]')).toHaveClass(/active/);
 });
 
 test('perpendicular placement shares a corner and serves both panel planes', async ({ page }) => {
