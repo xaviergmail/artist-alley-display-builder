@@ -140,6 +140,22 @@ const TABLE_DEPTH = 24;
 const TABLE_TOP_T = 1.5;
 const FLOOR_Y = -30;
 
+function createContactOcclusionTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const context = canvas.getContext('2d')!;
+  const gradient = context.createRadialGradient(128, 128, 12, 128, 128, 128);
+  gradient.addColorStop(0, 'rgba(51, 65, 85, 0.34)');
+  gradient.addColorStop(0.58, 'rgba(51, 65, 85, 0.15)');
+  gradient.addColorStop(1, 'rgba(51, 65, 85, 0)');
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 256, 256);
+  return new THREE.CanvasTexture(canvas);
+}
+
+const CONTACT_OCCLUSION = createContactOcclusionTexture();
+
 function disposeObject(obj: THREE.Object3D): void {
   obj.traverse((o) => {
     if (o instanceof THREE.Mesh) {
@@ -165,23 +181,28 @@ function hitMaterial(): THREE.MeshBasicMaterial {
 }
 
 // Panel content in its native GLB frame: x/z span [-6, 6], thickness along y.
-function buildPanelContent(type: PanelType, ghost: boolean, invalid = false): THREE.Group {
+function buildPanelContent(type: PanelType, ghost: boolean, invalid = false, metalColor = '#2f3945'): THREE.Group {
   const g = new THREE.Group();
   if (ghost) {
     g.add(new THREE.Mesh(new THREE.BoxGeometry(STEP, THICK, STEP), ghostMaterial(invalid)));
   } else {
     const asset = panelAssets?.[type.kind];
     if (asset) {
-      // Plain panel colors are assembly state, including the default black
-      // type. Grid and outline retain their authored material treatment.
+      // Panel is the GLB's named surface. Every other material group is
+      // hardware and uses the assembly-wide metal finish.
       const mats = asset.materials.map((m) => (m as THREE.MeshStandardMaterial).clone());
-      if (type.kind === 'plain') for (const m of mats) m.color.set(type.color);
-      g.add(new THREE.Mesh(asset.geometry.clone(), mats));
+      for (const material of mats) {
+        if (type.kind === 'plain' && material.name === 'Panel') material.color.set(type.color);
+        else material.color.set(metalColor);
+      }
+      const mesh = new THREE.Mesh(asset.geometry.clone(), mats);
+      mesh.castShadow = false;
+      g.add(mesh);
     } else {
       // Fallback while the model loads (or if it failed): procedural boxes.
       g.add(new THREE.Mesh(
         new THREE.BoxGeometry(STEP, THICK, STEP),
-        new THREE.MeshStandardMaterial({ color: type.color, roughness: 0.55, metalness: 0.05 }),
+        new THREE.MeshStandardMaterial({ color: type.kind === 'plain' ? type.color : metalColor, roughness: 0.55, metalness: 0.05 }),
       ));
     }
   }
@@ -211,14 +232,23 @@ const ORIENT_QUATS: Record<string, THREE.Quaternion> = {
   'x-1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2),
 };
 
-function buildConnector(conn: Connector, corner: [number, number, number], ghost: boolean, invalid = false): THREE.Group {
+function buildConnector(
+  conn: Connector,
+  corner: [number, number, number],
+  ghost: boolean,
+  invalid = false,
+  connectorColor = '#2b2f33',
+): THREE.Group {
   const g = new THREE.Group();
   if (connectorAsset) {
     const mat = ghost
       ? new THREE.MeshBasicMaterial({ color: invalid ? GHOST_BAD : GHOST, transparent: true, opacity: 0.45, depthWrite: false })
       : (connectorAsset.materials[0] as THREE.MeshStandardMaterial).clone();
+    if (!ghost) (mat as THREE.MeshStandardMaterial).color.set(connectorColor);
     const mesh = new THREE.Mesh(connectorAsset.geometry.clone(), mat);
     mesh.quaternion.copy(ORIENT_QUATS[`${conn.plane}${conn.sign}`]);
+    if (conn.turn) mesh.rotateY(conn.turn * Math.PI / 2);
+    mesh.castShadow = false;
     g.add(mesh);
   } else {
     // Fallback while the model loads: small dark cube at the hub.
@@ -226,7 +256,7 @@ function buildConnector(conn: Connector, corner: [number, number, number], ghost
       new THREE.BoxGeometry(1.5, 1.5, 1.5),
       ghost
         ? new THREE.MeshBasicMaterial({ color: invalid ? GHOST_BAD : GHOST, transparent: true, opacity: 0.45, depthWrite: false })
-        : new THREE.MeshStandardMaterial({ color: 0x2b2f33, roughness: 0.5, metalness: 0.4 }),
+        : new THREE.MeshStandardMaterial({ color: connectorColor, roughness: 0.5, metalness: 0.4 }),
     ));
   }
   g.position.set(corner[0] * STEP, corner[1] * STEP, corner[2] * STEP);
@@ -247,6 +277,7 @@ export class SceneCtx {
   readonly tableGroup = new THREE.Group();
   readonly panelGroup = new THREE.Group();
   readonly ghostGroup = new THREE.Group();
+  readonly markerGroup = new THREE.Group();
   readonly connectorGroup = new THREE.Group();
   tableTop: THREE.Mesh | null = null;
   private tableLength = 72;
@@ -258,21 +289,29 @@ export class SceneCtx {
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.08;
     container.appendChild(this.renderer.domElement);
 
     this.scene.background = new THREE.Color(0xe8edf2);
     this.camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.5, 4000);
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x8899aa, 0.9);
-    const dir = new THREE.DirectionalLight(0xffffff, 2.2);
-    dir.position.set(80, 160, 100);
-    dir.castShadow = true;
-    dir.shadow.mapSize.set(2048, 2048);
-    dir.shadow.camera.left = -220;
-    dir.shadow.camera.right = 220;
-    dir.shadow.camera.top = 220;
-    dir.shadow.camera.bottom = -220;
-    dir.shadow.camera.far = 600;
-    this.scene.add(hemi, dir);
+    const ambient = new THREE.AmbientLight(0xffffff, 0.72);
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x9aa7b6, 1.15);
+    const overhead = new THREE.DirectionalLight(0xffffff, 1.55);
+    overhead.position.set(0, 260, 40);
+    overhead.castShadow = true;
+    overhead.shadow.mapSize.set(2048, 2048);
+    overhead.shadow.camera.left = -220;
+    overhead.shadow.camera.right = 220;
+    overhead.shadow.camera.top = 220;
+    overhead.shadow.camera.bottom = -220;
+    overhead.shadow.camera.far = 600;
+    overhead.shadow.radius = 8;
+    overhead.shadow.normalBias = 0.03;
+    const fill = new THREE.DirectionalLight(0xdbeafe, 0.42);
+    fill.position.set(-140, 90, -100);
+    this.scene.add(ambient, hemi, overhead, fill);
 
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(2400, 2400),
@@ -281,7 +320,7 @@ export class SceneCtx {
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = FLOOR_Y;
     ground.receiveShadow = true;
-    this.scene.add(ground, this.tableGroup, this.panelGroup, this.connectorGroup, this.ghostGroup);
+    this.scene.add(ground, this.tableGroup, this.panelGroup, this.connectorGroup, this.ghostGroup, this.markerGroup);
 
     this.selectionHelper = new THREE.Mesh(
       new THREE.BoxGeometry(STEP + 1, THICK + 2, STEP + 1),
@@ -291,12 +330,7 @@ export class SceneCtx {
     this.scene.add(this.selectionHelper);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    // Right button orbits, middle button pans, wheel zooms; left is reserved for editing.
-    this.controls.mouseButtons = {
-      LEFT: null,
-      MIDDLE: THREE.MOUSE.PAN,
-      RIGHT: THREE.MOUSE.ROTATE,
-    } as unknown as typeof this.controls.mouseButtons; // three types omit the null sentinel
+    this.controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
     this.controls.maxPolarAngle = Math.PI / 2;
     this.controls.minDistance = 20;
     this.controls.maxDistance = 800;
@@ -305,6 +339,14 @@ export class SceneCtx {
 
   panelMesh(key: string): THREE.Object3D | undefined {
     return this.panelMeshes.get(key);
+  }
+
+  setPlacementMode(mode: 'normal' | 'quick'): void {
+    this.controls.mouseButtons = {
+      LEFT: mode === 'normal' ? THREE.MOUSE.ROTATE : null,
+      MIDDLE: THREE.MOUSE.PAN,
+      RIGHT: THREE.MOUSE.ROTATE,
+    } as unknown as typeof this.controls.mouseButtons;
   }
 
   setTableLength(len: number): void {
@@ -326,6 +368,13 @@ export class SceneCtx {
         this.tableGroup.add(leg);
       }
     }
+    const ao = new THREE.Mesh(
+      new THREE.PlaneGeometry(len + 52, TABLE_DEPTH + 52),
+      new THREE.MeshBasicMaterial({ map: CONTACT_OCCLUSION, transparent: true, depthWrite: false }),
+    );
+    ao.rotation.x = -Math.PI / 2;
+    ao.position.set(len / 2, FLOOR_Y + 0.04, 0);
+    this.tableGroup.add(ao);
     this.addChair(len);
     this.controls.target.set(len / 2, 12, 0);
     this.camera.position.set(len / 2 + 70, 65, 110);
@@ -359,14 +408,14 @@ export class SceneCtx {
     for (const panel of world.panels.values()) {
       const type = world.types.get(panel.typeId);
       if (!type) continue;
-      const obj = buildPanelContent(type, false);
+      const obj = buildPanelContent(type, false, false, world.metalColor);
       placePanel(obj, panel);
       obj.userData.panelKey = panelKey(panel);
       this.panelGroup.add(obj);
       this.panelMeshes.set(panelKey(panel), obj);
     }
     for (const [key, conn] of world.connectors) {
-      this.connectorGroup.add(buildConnector(conn, parsePointKey(key), false));
+      this.connectorGroup.add(buildConnector(conn, parsePointKey(key), false, false, world.connectorColor));
     }
     this.updateSelection(world);
   }
@@ -390,6 +439,17 @@ export class SceneCtx {
     this.ghostGroup.add(obj);
     for (const [key, conn] of ghost.connectors) {
       this.ghostGroup.add(buildConnector(conn, parsePointKey(key), true, ghost.invalid === true));
+    }
+  }
+
+  setCandidateGhosts(candidates: Array<{ placement: Placement; type: PanelType }>): void {
+    clearGroup(this.markerGroup);
+    for (const candidate of candidates) {
+      const obj = buildPanelContent(candidate.type, true);
+      placePanel(obj, candidate.placement);
+      obj.scale.setScalar(2 / 3);
+      obj.userData.candidateKey = panelKey(candidate.placement);
+      this.markerGroup.add(obj);
     }
   }
 

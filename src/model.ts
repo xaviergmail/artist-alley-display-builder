@@ -32,6 +32,9 @@ export type Corner = [number, number, number];
 export interface Connector {
   plane: Plane;
   sign: 1 | -1;
+  // Quarter turns around the connector plate normal. A free, horizontal hub
+  // faces the artist chair; attached side panels may pin its authored turn.
+  turn?: 0 | 1 | 2 | 3;
 }
 
 export interface AssemblyState {
@@ -39,9 +42,11 @@ export interface AssemblyState {
   tableLength: number;
   activeTypeId: string;
   selectedKey: string | null;
+  metalColor?: string;
+  connectorColor?: string;
   types: PanelType[];
   panels: Panel[];
-  connectors: Array<{ point: Corner; plane: Plane; sign: 1 | -1 }>;
+  connectors: Array<{ point: Corner; plane: Plane; sign: 1 | -1; turn?: 0 | 1 | 2 | 3 }>;
 }
 
 export const panelKey = (p: Placement) => `${p.plane}:${p.i},${p.j},${p.k}`;
@@ -136,12 +141,20 @@ export function cornerNeedsConnector(panels: Placement[]): boolean {
 // (y-plane), give it a horizontal plate so the connector's flat side faces
 // down; otherwise put the plate in the anchor panel's plane (the earliest
 // panel at that corner). Prefer ribs pointing up (+) when both signs are valid.
+// A loose horizontal connector's distinct face should look toward the chair
+// behind the table (-z). The current asset faces +z at turn 0, so turn 2
+// reverses it. Side panels take precedence because their mounting direction
+// is structural rather than decorative.
+function connectorTurn(panels: Placement[], conn: Pick<Connector, 'plane'>): 0 | 1 | 2 | 3 {
+  return conn.plane === 'y' && panels.every((panel) => panel.plane === 'y') ? 2 : 0;
+}
+
 export function chooseOrientation(panels: Placement[], c: Corner, existing?: Connector): Connector {
   const valid = validOrientations(panels, c);
   if (valid.length === 0) {
     // Invalid placement (ghost preview of an illegal move): pick the orientation
     // serving the most panels so a red preview can still be rendered.
-    let best: Connector = { plane: panels[0].plane, sign: 1 };
+    let best: Pick<Connector, 'plane' | 'sign'> = { plane: panels[0].plane, sign: 1 };
     let bestScore = -1;
     for (const plane of ['x', 'y', 'z'] as const) {
       for (const sign of [1, -1] as const) {
@@ -153,7 +166,7 @@ export function chooseOrientation(panels: Placement[], c: Corner, existing?: Con
         }
       }
     }
-    return best;
+    return { ...best, turn: connectorTurn(panels, best) };
   }
   const anchorPlane = panels[0].plane;
   const hasFaceDown = panels.some((p) => p.plane === 'y');
@@ -165,7 +178,7 @@ export function chooseOrientation(panels: Placement[], c: Corner, existing?: Con
     valid.find((v) => v.plane === anchorPlane && v.sign === 1) ??
     valid.find((v) => v.plane === anchorPlane) ??
     valid[0];
-  return chosen;
+  return { ...chosen, turn: connectorTurn(panels, chosen) };
 }
 
 export class World {
@@ -175,6 +188,8 @@ export class World {
   activeTypeId = 'plain';
   selectedKey: string | null = null;
   tableLength = 72; // inches; 6 ft default
+  metalColor = '#2f3945';
+  connectorColor = '#2b2f33';
   private nextPanelId = 1;
   private nextCustomType = 1;
 
@@ -247,6 +262,11 @@ export class World {
     if (type?.kind === 'plain') type.color = color;
   }
 
+  setMaterialColor(target: 'metal' | 'connector', color: string): void {
+    if (target === 'metal') this.metalColor = color;
+    else this.connectorColor = color;
+  }
+
   addCustomType(color: string): PanelType {
     const t: PanelType = { id: `custom-${this.nextCustomType++}`, kind: 'plain', color, custom: true };
     this.types.set(t.id, t);
@@ -278,12 +298,15 @@ export class World {
       tableLength: this.tableLength,
       activeTypeId: this.activeTypeId,
       selectedKey: this.selectedKey,
+      metalColor: this.metalColor,
+      connectorColor: this.connectorColor,
       types: [...this.types.values()].map((type) => ({ ...type })),
       panels: [...this.panels.values()].map((panel) => ({ ...panel })),
       connectors: [...this.connectors.entries()].map(([key, connector]) => ({
         point: parsePointKey(key),
         plane: connector.plane,
         sign: connector.sign,
+        turn: connector.turn,
       })),
     };
   }
@@ -325,8 +348,9 @@ export class World {
     this.panels = panels;
     this.connectors = new Map();
     this.tableLength = state.tableLength;
+    this.metalColor = typeof state.metalColor === 'string' ? state.metalColor : '#2f3945';
+    this.connectorColor = typeof state.connectorColor === 'string' ? state.connectorColor : '#2b2f33';
     this.activeTypeId = types.has(state.activeTypeId) ? state.activeTypeId : 'plain';
-    this.selectedKey = state.selectedKey && panels.has(state.selectedKey) ? state.selectedKey : null;
     this.nextPanelId = maxPanelId + 1;
     this.nextCustomType = Math.max(
       1,

@@ -1,52 +1,62 @@
 import type { Panel, PanelType } from './model';
 
+export type MaterialTarget = 'metal' | 'connector';
+
 export interface UICallbacks {
   onTypeClick(id: string): void;
   onAddCustom(color: string): void;
   onSetTypeColor(id: string, color: string): void;
+  onSetMaterialColor(target: MaterialTarget, color: string): void;
   onRemoveType(id: string, replacementId: string | null): void;
   onRemoveSelected(): void;
   onTableSelect(len: number): void;
+  onQuickModeChange(enabled: boolean): void;
+  onSave(): boolean;
+  onLoad(): boolean;
+  onShare(): Promise<boolean>;
   onDumpState(): Promise<boolean>;
 }
 
 const TRASH_SVG =
   '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zM6 9h12l-1.2 12H7.2L6 9z"/></svg>';
 const BUG_SVG =
-  '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M19.1 13.5 22 12l-2.9-1.5.4-2.1-2.2.3L16 6.8l.6-2.5-2.2 1.2L12 3l-2.4 2.5-2.2-1.2.6 2.5-1.3 1.9-2.2-.3.4 2.1L2 12l2.9 1.5-.4 2.1 2.2-.3L8 17.2l-.6 2.5 2.2-1.2L12 21l2.4-2.5 2.2 1.2-.6-2.5 1.3-1.9 2.2.3-.4-2.1ZM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10Zm-2-5a2 2 0 1 0 4 0 2 2 0 0 0-4 0Z"/></svg>';
+  '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M19.1 13.5 22 12l-2.9-1.5.4-2.1-2.2.3L16 6.8l.6-2.5-2.2 1.2L12 3l-2.4 2.5-2.2-1.2.6 2.5-1.3 1.9-2.2-.3.4 2.1L2 12l2.9 1.5-.4 2.1 2.2-.3L8 17.2l-.6 2.5 2.2-1.2L12 21l2.4-2.5 2.2 1.2-.6-2.5 1.3-1.9 2.2.3-.4-2.1ZM12 17a5 5 0 1 1 0-10 5 5 0 0 0-4 0Z"/></svg>';
 const CLOSE_SVG =
-  '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="m6.7 5.3 12 12-1.4 1.4-12-12zM18.7 6.7l-12 12-1.4-1.4 12-12z"/></svg>';
+  '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="m6.7 5.3 12 12-1.4 1.4-12-12zM18.7 6.7l-12 12-1.4-1.4 1.4-1.4 12-12z"/></svg>';
 
-const TABLE_OPTIONS: Array<[number, string]> = [
-  [36, '3 ft'],
-  [48, '4 ft'],
-  [72, '6 ft'],
-  [96, '8 ft'],
-];
+const TABLE_OPTIONS: Array<[number, string]> = [[36, '3 ft'], [48, '4 ft'], [72, '6 ft'], [96, '8 ft']];
 const PALETTE = [
   '#111827', '#ef4444', '#f97316', '#facc15', '#84cc16', '#22c55e',
   '#14b8a6', '#06b6d4', '#3b82f6', '#6366f1', '#8b5cf6', '#d946ef',
   '#f43f5e', '#a16207', '#78716c', '#f8fafc',
 ];
+const GITHUB_URL = 'https://github.com/xaviergmail/artist-alley-display-builder';
 
-interface CountType extends PanelType {
-  count: number;
-}
+type ColorTarget =
+  | { kind: 'new' }
+  | { kind: 'type'; id: string }
+  | { kind: 'material'; target: MaterialTarget };
+
+interface CountType extends PanelType { count: number; }
 
 export class UI {
   private typeList: HTMLDivElement;
   private addBtn: HTMLButtonElement;
   private selectedTrash: HTMLButtonElement;
   private dumpBtn: HTMLButtonElement;
-  private dumpStatusTimer: number | undefined;
+  private quickBtn: HTMLButtonElement;
+  private materialButtons = new Map<MaterialTarget, HTMLButtonElement>();
+  private status: HTMLDivElement;
+  private statusTimer: number | undefined;
   private tableButtons: Array<{ el: HTMLButtonElement; len: number }> = [];
   private types = new Map<string, PanelType>();
   private colorDialog: HTMLDialogElement;
   private colorDialogTitle: HTMLHeadingElement;
   private colorHex: HTMLInputElement;
   private colorPreview: HTMLSpanElement;
-  private colorTarget: string | null | undefined;
+  private colorTarget: ColorTarget | undefined;
   private replacementDialog: HTMLDialogElement;
+  private tutorialDialog: HTMLDialogElement;
   private countBar: HTMLDivElement;
 
   constructor(sidebar: HTMLElement, viewport: HTMLElement, private cbs: UICallbacks) {
@@ -58,14 +68,57 @@ export class UI {
     this.addBtn.className = 'add-btn';
     this.addBtn.textContent = '+ Add color';
     this.addBtn.setAttribute('aria-haspopup', 'dialog');
-    this.addBtn.addEventListener('click', () => this.openColorPicker(null, '#e74c3c'));
+    this.addBtn.addEventListener('click', () => this.openColorPicker({ kind: 'new' }, '#e74c3c', 'Add colored panel'));
     sidebar.appendChild(this.addBtn);
+
+    this.quickBtn = document.createElement('button');
+    this.quickBtn.className = 'quick-mode-btn';
+    this.quickBtn.type = 'button';
+    this.quickBtn.addEventListener('click', () => this.setQuickMode(this.quickBtn.getAttribute('aria-pressed') !== 'true'));
+    sidebar.appendChild(this.quickBtn);
+    this.setQuickMode(false, false);
+
+    const materials = document.createElement('section');
+    materials.className = 'material-controls';
+    materials.setAttribute('aria-label', 'Global materials');
+    materials.append(
+      this.makeMaterialButton('metal', 'Metal'),
+      this.makeMaterialButton('connector', 'Connector'),
+    );
+    sidebar.appendChild(materials);
 
     ({ dialog: this.colorDialog, title: this.colorDialogTitle, hex: this.colorHex, preview: this.colorPreview } = this.makeColorDialog());
     this.replacementDialog = this.makeReplacementDialog();
+    this.tutorialDialog = this.makeTutorialDialog();
 
     const footer = document.createElement('div');
     footer.className = 'sidebar-footer';
+    const actions = document.createElement('div');
+    actions.className = 'assembly-actions';
+    actions.append(
+      this.makeActionButton('Save', 'Save this assembly in this browser', () => {
+        const saved = this.cbs.onSave();
+        this.showStatus(saved ? 'Saved in this browser' : 'Could not save assembly', saved ? 'success' : 'error');
+      }),
+      this.makeActionButton('Load', 'Load the browser-saved assembly', () => {
+        const loaded = this.cbs.onLoad();
+        this.showStatus(loaded ? 'Saved assembly restored' : 'No saved assembly found', loaded ? 'success' : 'error');
+      }),
+      this.makeActionButton('Share', 'Copy a shareable assembly URL', async () => {
+        const shared = await this.cbs.onShare();
+        this.showStatus(shared ? 'Share URL copied' : 'Could not copy share URL', shared ? 'success' : 'error');
+      }),
+    );
+    const github = document.createElement('a');
+    github.className = 'sidebar-action github-action';
+    github.href = GITHUB_URL;
+    github.target = '_blank';
+    github.rel = 'noreferrer';
+    github.textContent = 'GitHub';
+    github.title = 'Open the project on GitHub';
+    actions.appendChild(github);
+    footer.appendChild(actions);
+
     this.dumpBtn = document.createElement('button');
     this.dumpBtn.className = 'dump-state-btn';
     this.dumpBtn.type = 'button';
@@ -76,7 +129,22 @@ export class UI {
     footer.appendChild(this.dumpBtn);
     sidebar.appendChild(footer);
 
+    this.status = document.createElement('div');
+    this.status.className = 'action-status';
+    this.status.setAttribute('role', 'status');
+    this.status.setAttribute('aria-live', 'polite');
+    viewport.appendChild(this.status);
+
     this.selectedTrash = this.makeOverlayTrash(viewport, () => this.cbs.onRemoveSelected());
+
+    const help = document.createElement('button');
+    help.className = 'help-btn';
+    help.type = 'button';
+    help.textContent = '?';
+    help.title = 'Show builder tutorial';
+    help.setAttribute('aria-label', 'Show builder tutorial');
+    help.addEventListener('click', () => this.tutorialDialog.showModal());
+    viewport.appendChild(help);
 
     const selector = document.createElement('div');
     selector.id = 'table-selector';
@@ -97,12 +165,28 @@ export class UI {
     viewport.appendChild(this.countBar);
   }
 
-  private makeColorDialog(): {
-    dialog: HTMLDialogElement;
-    title: HTMLHeadingElement;
-    hex: HTMLInputElement;
-    preview: HTMLSpanElement;
-  } {
+  private makeActionButton(label: string, title: string, action: () => void | Promise<void>): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.className = 'sidebar-action';
+    button.type = 'button';
+    button.textContent = label;
+    button.title = title;
+    button.addEventListener('click', () => { void action(); });
+    return button;
+  }
+
+  private makeMaterialButton(target: MaterialTarget, label: string): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.className = 'material-color-btn';
+    button.type = 'button';
+    button.textContent = label;
+    button.title = `Change global ${label.toLowerCase()} color`;
+    button.addEventListener('click', () => this.openColorPicker({ kind: 'material', target }, button.style.getPropertyValue('--swatch') || '#2f3945', `Change ${label.toLowerCase()} color`));
+    this.materialButtons.set(target, button);
+    return button;
+  }
+
+  private makeColorDialog(): { dialog: HTMLDialogElement; title: HTMLHeadingElement; hex: HTMLInputElement; preview: HTMLSpanElement } {
     const dialog = document.createElement('dialog');
     dialog.className = 'picker-dialog';
     const header = document.createElement('header');
@@ -141,9 +225,7 @@ export class UI {
     hex.autocomplete = 'off';
     hex.spellcheck = false;
     hex.setAttribute('aria-label', 'Hex color');
-    hex.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') this.commitColor(hex.value);
-    });
+    hex.addEventListener('keydown', (event) => { if (event.key === 'Enter') this.commitColor(hex.value); });
     hex.addEventListener('change', () => this.commitColor(hex.value));
     hexLabel.appendChild(hex);
     dialog.append(header, preview, palette, hexLabel);
@@ -159,9 +241,46 @@ export class UI {
     return dialog;
   }
 
-  private openColorPicker(typeId: string | null, color: string): void {
-    this.colorTarget = typeId;
-    this.colorDialogTitle.textContent = typeId === null ? 'Add colored panel' : 'Change panel color';
+  private makeTutorialDialog(): HTMLDialogElement {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'tutorial-dialog';
+    const header = document.createElement('header');
+    const title = document.createElement('h2');
+    title.textContent = 'Build your artist alley display';
+    const close = document.createElement('button');
+    close.className = 'dialog-close';
+    close.type = 'button';
+    close.title = 'Close tutorial';
+    close.setAttribute('aria-label', 'Close tutorial');
+    close.innerHTML = CLOSE_SVG;
+    close.addEventListener('click', () => dialog.close());
+    header.append(title, close);
+    const steps = [
+      ['Navigate', 'Drag with one finger or the left mouse button to orbit. Two fingers pan or pinch to zoom; the mouse wheel also zooms.'],
+      ['Place panels', 'Normal mode: tap a panel or the table, then tap one of the blue possible-panel previews. Impossible placements are never shown.'],
+      ['Quick build', 'Turn on Quick build in the sidebar for the original hover-a-preview, click-to-place workflow.'],
+      ['Connectors', 'Connectors are placed and aligned automatically. Free table-edge connectors face inward toward the chair.'],
+      ['Panel types', 'Choose a panel type at left, or add any colored plain panel. The Metal and Connector controls set global finishes.'],
+      ['Counts', 'The bar at the bottom lists each panel type and the total number of connectors.'],
+      ['Save and share', 'Save and Load stay in this browser only. Share copies a URL with the entire assembly state for someone else.'],
+      ['Table size', 'Choose 3, 4, 6, or 8 feet from the controls above the table.'],
+    ];
+    const list = document.createElement('ol');
+    for (const [label, text] of steps) {
+      const item = document.createElement('li');
+      const strong = document.createElement('strong');
+      strong.textContent = `${label}: `;
+      item.append(strong, text);
+      list.appendChild(item);
+    }
+    dialog.append(header, list);
+    document.body.appendChild(dialog);
+    return dialog;
+  }
+
+  private openColorPicker(target: ColorTarget, color: string, title: string): void {
+    this.colorTarget = target;
+    this.colorDialogTitle.textContent = title;
     this.colorHex.value = color;
     this.colorHex.removeAttribute('aria-invalid');
     this.colorPreview.style.setProperty('--swatch', color);
@@ -174,8 +293,9 @@ export class UI {
       this.colorHex.setAttribute('aria-invalid', 'true');
       return;
     }
-    if (this.colorTarget === null) this.cbs.onAddCustom(color);
-    else if (this.colorTarget) this.cbs.onSetTypeColor(this.colorTarget, color);
+    if (this.colorTarget?.kind === 'new') this.cbs.onAddCustom(color);
+    else if (this.colorTarget?.kind === 'type') this.cbs.onSetTypeColor(this.colorTarget.id, color);
+    else if (this.colorTarget?.kind === 'material') this.cbs.onSetMaterialColor(this.colorTarget.target, color);
     this.colorDialog.close();
   }
 
@@ -189,14 +309,20 @@ export class UI {
   }
 
   private setDumpStatus(copied: boolean): void {
-    window.clearTimeout(this.dumpStatusTimer);
     this.dumpBtn.classList.toggle('copied', copied);
     this.dumpBtn.classList.toggle('failed', !copied);
     this.dumpBtn.title = copied ? 'Assembly JSON copied' : 'Could not copy assembly JSON';
-    this.dumpStatusTimer = window.setTimeout(() => {
+    window.setTimeout(() => {
       this.dumpBtn.classList.remove('copied', 'failed');
       this.dumpBtn.title = 'Copy assembly JSON';
     }, 1600);
+  }
+
+  private showStatus(message: string, kind: 'success' | 'error'): void {
+    window.clearTimeout(this.statusTimer);
+    this.status.textContent = message;
+    this.status.className = `action-status visible ${kind}`;
+    this.statusTimer = window.setTimeout(() => { this.status.className = 'action-status'; }, 2200);
   }
 
   private makeTypeEntry(type: PanelType, active: boolean): HTMLDivElement {
@@ -219,7 +345,7 @@ export class UI {
       color.style.setProperty('--swatch', type.color);
       color.title = 'Change panel color';
       color.setAttribute('aria-label', `Change ${type.id} panel color`);
-      color.addEventListener('click', () => this.openColorPicker(type.id, type.color));
+      color.addEventListener('click', () => this.openColorPicker({ kind: 'type', id: type.id }, type.color, 'Change panel color'));
       entry.appendChild(color);
     }
     if (type.custom) {
@@ -270,6 +396,18 @@ export class UI {
     this.replacementDialog.showModal();
   }
 
+  setQuickMode(enabled: boolean, notify = true): void {
+    this.quickBtn.setAttribute('aria-pressed', String(enabled));
+    this.quickBtn.textContent = `Quick build: ${enabled ? 'On' : 'Off'}`;
+    this.quickBtn.classList.toggle('active', enabled);
+    if (notify) this.cbs.onQuickModeChange(enabled);
+  }
+
+  updateMaterials(metalColor: string, connectorColor: string): void {
+    this.materialButtons.get('metal')?.style.setProperty('--swatch', metalColor);
+    this.materialButtons.get('connector')?.style.setProperty('--swatch', connectorColor);
+  }
+
   updateTypes(types: Map<string, PanelType>, activeId: string): void {
     this.types = new Map(types);
     this.typeList.replaceChildren();
@@ -277,10 +415,7 @@ export class UI {
   }
 
   setAssemblyCounts(types: Map<string, PanelType>, panels: Map<string, Panel>, connectorCount: number): void {
-    const counts: CountType[] = [...types.values()].map((type) => ({
-      ...type,
-      count: [...panels.values()].filter((panel) => panel.typeId === type.id).length,
-    }));
+    const counts: CountType[] = [...types.values()].map((type) => ({ ...type, count: [...panels.values()].filter((panel) => panel.typeId === type.id).length }));
     this.countBar.replaceChildren();
     for (const type of counts) {
       const item = document.createElement('span');

@@ -39,6 +39,9 @@ async function canvasBox(page: Page): Promise<{ x: number; y: number; width: num
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await page.waitForSelector('#viewport canvas');
+  // Legacy hover/click specs below deliberately exercise Quick build. New
+  // normal-mode coverage explicitly toggles this back off.
+  await page.locator('.quick-mode-btn').click();
 });
 
 test('sidebar shows the 3 default panel types without remove buttons', async ({ page }) => {
@@ -404,3 +407,72 @@ test('invalid edge candidate shows a red ghost, rejects its click, and reports d
   expect(diagnostic.assembly.panels).toHaveLength(result.panels);
 });
 
+
+async function clickProjected(page: Page, objectExpression: string): Promise<void> {
+  const point = await page.evaluate((expression) => {
+    const b = (window as unknown as { __builder: any }).__builder;
+    const object = Function('b', `return ${expression}`)(b);
+    const p = object.getWorldPosition(object.position.clone()).project(b.sceneCtx.camera);
+    const rect = b.sceneCtx.renderer.domElement.getBoundingClientRect();
+    return { x: rect.left + (p.x * 0.5 + 0.5) * rect.width, y: rect.top + (-p.y * 0.5 + 0.5) * rect.height };
+  }, objectExpression);
+  await page.mouse.click(point.x, point.y);
+}
+test('normal mode anchors table placement then places only a legal ghost', async ({ page }) => {
+  await page.locator('.quick-mode-btn').click();
+  await expect(page.locator('.quick-mode-btn')).toHaveText('Quick build: Off');
+  await clickProjected(page, 'b.sceneCtx.tableTop');
+  await expect.poll(() => page.evaluate(() => (window as any).__builder.sceneCtx.markerGroup.children.length)).toBe(1);
+  expect((await builder(page)).world.panels.size).toBe(0);
+
+  await clickProjected(page, 'b.sceneCtx.markerGroup.children[0]');
+  const state = await page.evaluate(() => {
+    const b = (window as any).__builder;
+    return { panels: [...b.world.panels.values()], connectors: [...b.world.connectors.values()] };
+  });
+  expect(state.panels).toHaveLength(1);
+  expect(state.connectors).toEqual(expect.arrayContaining([
+    expect.objectContaining({ plane: 'y', sign: 1, turn: 2 }),
+  ]));
+});
+
+test('save and load controls restore browser-local assembly state', async ({ page }) => {
+  await page.locator('.quick-mode-btn').click();
+  await clickProjected(page, 'b.sceneCtx.tableTop');
+  await clickProjected(page, 'b.sceneCtx.markerGroup.children[0]');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.locator('.action-status')).toHaveText('Saved in this browser');
+
+  await clickProjected(page, 'b.sceneCtx.panelGroup.children[0]');
+  await clickProjected(page, 'b.sceneCtx.markerGroup.children[0]');
+  await expect.poll(() => page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(2);
+  await page.getByRole('button', { name: 'Load' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(1);
+});
+
+test('global material controls and share button serialize global finishes', async ({ page }) => {
+  await page.locator('.material-color-btn').first().click();
+  await page.locator('.palette-swatch[title="#3b82f6"]').click();
+  await page.locator('.material-color-btn').nth(1).click();
+  await page.locator('.palette-swatch[title="#ef4444"]').click();
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: async (text: string) => { document.documentElement.dataset.shareUrl = text; } },
+    });
+  });
+  await page.getByRole('button', { name: 'Share' }).click();
+  const share = new URL(await page.locator('html').getAttribute('data-share-url')!);
+  const assembly = JSON.parse(share.searchParams.get('assembly')!);
+  expect(assembly).toMatchObject({ metalColor: '#3b82f6', connectorColor: '#ef4444' });
+});
+
+test('tutorial describes navigation, build modes, persistence, and sharing', async ({ page }) => {
+  await page.getByRole('button', { name: 'Show builder tutorial' }).click();
+  const tutorial = page.locator('.tutorial-dialog');
+  await expect(tutorial).toBeVisible();
+  await expect(tutorial).toContainText('Two fingers pan or pinch to zoom');
+  await expect(tutorial).toContainText('Quick build');
+  await expect(tutorial).toContainText('Save and Load stay in this browser only');
+  await expect(tutorial).toContainText('Share copies a URL');
+});

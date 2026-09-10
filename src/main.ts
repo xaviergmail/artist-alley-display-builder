@@ -4,7 +4,9 @@ import {
   STEP,
   World,
   panelCenter,
+  panelCorners,
   panelKey,
+  pointKey,
   type AssemblyState,
   type Placement,
 } from './model';
@@ -17,6 +19,8 @@ if (!viewport || !sidebar) throw new Error('missing #viewport/#sidebar');
 const viewportEl: HTMLElement = viewport;
 
 const SHARE_PARAM = 'assembly';
+const SAVE_KEY = 'artist-alley-display-builder:assembly-v1';
+const QUICK_MODE_KEY = 'artist-alley-display-builder:quick-mode';
 
 function restoreFromUrl(target: World): boolean {
   const raw = new URL(window.location.href).searchParams.get(SHARE_PARAM);
@@ -70,7 +74,6 @@ function userDataValue(o: THREE.Object3D, field: string): unknown {
   return undefined;
 }
 
-
 interface PickResult {
   panelKeyHit: string | null;
   tablePoint: THREE.Vector3 | null;
@@ -86,17 +89,26 @@ function pick(): PickResult {
   return { panelKeyHit: null, tablePoint: null };
 }
 
+function pickCandidate(): string | null {
+  const hit = firstHit([sceneCtx.markerGroup]);
+  const key = hit ? userDataValue(hit.object, 'candidateKey') : undefined;
+  return typeof key === 'string' ? key : null;
+}
+
+type BuildMode = 'normal' | 'quick';
+
+let buildMode: BuildMode = localStorage.getItem(QUICK_MODE_KEY) === 'true' ? 'quick' : 'normal';
 let hoverPanelKey: string | null = null;
-// Edge-hover placement: while the pointer hugs a panel edge, a ghost shows
-// one of the (up to 3) squares adjacent to that edge, chosen by the mouse
-// direction relative to the edge; too far from the edge and it disappears.
+// Edge-hover placement is retained only by quick build mode.
 let edgeHover: { panelKey: string; edge: number } | null = null;
 let ghostPlacement: Placement | null = null;
 let ghostInvalid = false;
 let camDragging = false;
-let downPos: { x: number; y: number } | null = null;
 let rightDown: { panelKey: string | null; x: number; y: number } | null = null;
 let lastMouse: { x: number; y: number } = { x: 0, y: 0 };
+let touchGesture = false;
+const activePointers = new Map<number, { x: number; y: number; moved: boolean; type: string }>();
+const normalCandidates = new Map<string, Placement>();
 
 const EDGE_ACTIVATE_PX = 45; // start showing the ghost this close to an edge
 const EDGE_EXTINGUISH_PX = 130; // ghost gone beyond this distance
@@ -188,6 +200,25 @@ function clearHover(): void {
   ghostPlacement = null;
   ghostInvalid = false;
   sceneCtx.setGhost(null);
+}
+
+function clearNormalCandidates(): void {
+  normalCandidates.clear();
+  sceneCtx.setCandidateGhosts([]);
+}
+
+function showNormalCandidates(candidates: Placement[]): void {
+  const type = world.types.get(world.activeTypeId);
+  clearNormalCandidates();
+  if (!type) return;
+  for (const candidate of candidates) normalCandidates.set(panelKey(candidate), candidate);
+  sceneCtx.setCandidateGhosts([...normalCandidates.values()].map((placement) => ({ placement, type })));
+  renderFrame();
+}
+
+function candidatesForPanel(panel: Placement): Placement[] {
+  const corners = new Set(panelCorners(panel).map(pointKey));
+  return world.candidates().filter((candidate) => panelCorners(candidate).some((corner) => corners.has(pointKey(corner))));
 }
 
 // Recompute the ghost for the remembered edge: pick the candidate square
@@ -301,6 +332,7 @@ function updateHover(clientX: number, clientY: number): void {
 function refresh(): void {
   sceneCtx.rebuild(world);
   ui.updateTypes(world.types, world.activeTypeId);
+  ui.updateMaterials(world.metalColor, world.connectorColor);
   ui.setTableActive(world.tableLength);
   ui.setAssemblyCounts(world.types, world.panels, world.connectors.size);
   syncUrl(world);
@@ -311,8 +343,9 @@ function placePanelAt(p: Placement): void {
   if (!world.canPlace(p)) return;
   world.place(p, world.activeTypeId);
   world.selectedKey = null;
+  clearNormalCandidates();
   refresh();
-  updateHover(lastMouse.x, lastMouse.y);
+  if (buildMode === 'quick') updateHover(lastMouse.x, lastMouse.y);
 }
 
 function assemblyJson(): string {
@@ -331,20 +364,53 @@ function fallbackCopy(text: string): boolean {
   return copied;
 }
 
-async function copyAssemblyJson(): Promise<boolean> {
-  const json = assemblyJson();
+async function copyText(text: string, label: string): Promise<boolean> {
   let clipboardError: unknown;
   if (navigator.clipboard?.writeText) {
     try {
-      await navigator.clipboard.writeText(json);
+      await navigator.clipboard.writeText(text);
       return true;
     } catch (error) {
       clipboardError = error;
     }
   }
-  if (fallbackCopy(json)) return true;
-  console.error('Could not copy assembly JSON', clipboardError);
+  if (fallbackCopy(text)) return true;
+  console.error(`Could not copy ${label}`, clipboardError);
   return false;
+}
+
+function saveAssembly(): boolean {
+  try {
+    localStorage.setItem(SAVE_KEY, assemblyJson());
+    return true;
+  } catch (error) {
+    console.error('Could not save assembly', error);
+    return false;
+  }
+}
+
+function loadAssembly(): boolean {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw || !world.restore(JSON.parse(raw) as AssemblyState)) return false;
+    sceneCtx.setTableLength(world.tableLength);
+    clearHover();
+    clearNormalCandidates();
+    refresh();
+    return true;
+  } catch (error) {
+    console.error('Could not load saved assembly', error);
+    return false;
+  }
+}
+
+async function copyAssemblyJson(): Promise<boolean> {
+  return copyText(assemblyJson(), 'assembly JSON');
+}
+
+async function copyShareUrl(): Promise<boolean> {
+  syncUrl(world);
+  return copyText(window.location.href, 'share URL');
 }
 
 function logRejectedGhostClick(placement: Placement): void {
@@ -379,13 +445,45 @@ function handleClick(): void {
   }
 }
 
+function handleNormalTap(clientX: number, clientY: number): void {
+  setNdc(clientX, clientY);
+  raycaster.setFromCamera(ndc, sceneCtx.camera);
+  const candidate = normalCandidates.get(pickCandidate() ?? '');
+  if (candidate) {
+    placePanelAt(candidate);
+    return;
+  }
+  const picked = pick();
+  if (picked.panelKeyHit) {
+    const panel = world.panel(picked.panelKeyHit);
+    if (!panel) return;
+    world.selectedKey = picked.panelKeyHit;
+    refresh();
+    showNormalCandidates(candidatesForPanel(panel));
+    return;
+  }
+  if (picked.tablePoint) {
+    const candidateOnTable = tableCandidate(picked.tablePoint);
+    if (candidateOnTable) {
+      world.selectedKey = null;
+      refresh();
+      showNormalCandidates([candidateOnTable]);
+      return;
+    }
+  }
+  if (world.selectedKey) world.selectedKey = null;
+  clearNormalCandidates();
+  refresh();
+}
+
 
 const ui = new UI(sidebar, viewport, {
   onTypeClick: (id) => {
     world.activeTypeId = id;
     if (world.selectedKey) world.retype(world.selectedKey, id);
     refresh();
-    updateHover(lastMouse.x, lastMouse.y);
+    if (buildMode === 'quick') updateHover(lastMouse.x, lastMouse.y);
+    else if (normalCandidates.size > 0) showNormalCandidates([...normalCandidates.values()]);
   },
   onAddCustom: (color) => {
     const type = world.addCustomType(color);
@@ -396,34 +494,57 @@ const ui = new UI(sidebar, viewport, {
     world.setTypeColor(id, color);
     refresh();
   },
+  onSetMaterialColor: (target, color) => {
+    world.setMaterialColor(target, color);
+    refresh();
+  },
   onRemoveType: (id, replacementId) => {
     world.removeType(id, replacementId);
+    clearNormalCandidates();
     refresh();
   },
   onRemoveSelected: () => {
     if (!world.selectedKey) return;
     world.removePanel(world.selectedKey);
+    clearNormalCandidates();
     refresh();
   },
   onTableSelect: (len) => {
     if (world.tableLength === len) return;
     world.tableLength = len;
     sceneCtx.setTableLength(len);
+    clearNormalCandidates();
     refresh();
   },
+  onQuickModeChange: (enabled) => {
+    buildMode = enabled ? 'quick' : 'normal';
+    localStorage.setItem(QUICK_MODE_KEY, String(enabled));
+    sceneCtx.setPlacementMode(buildMode);
+    clearHover();
+    clearNormalCandidates();
+    renderFrame();
+  },
+  onSave: () => saveAssembly(),
+  onLoad: () => loadAssembly(),
+  onShare: () => copyShareUrl(),
   onDumpState: () => copyAssemblyJson(),
 });
+sceneCtx.setPlacementMode(buildMode);
+ui.setQuickMode(buildMode === 'quick', false);
 
 window.addEventListener('popstate', () => {
   if (!restoreFromUrl(world)) return;
   sceneCtx.setTableLength(world.tableLength);
   clearHover();
+  clearNormalCandidates();
   refresh();
 });
 
 // ---------------------------------------------------------------- events
 
 canvas.addEventListener('pointerdown', (e) => {
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY, moved: false, type: e.pointerType });
+  if (e.pointerType === 'touch' && [...activePointers.values()].filter((pointer) => pointer.type === 'touch').length > 1) touchGesture = true;
   if (e.button === 2) {
     setNdc(e.clientX, e.clientY);
     raycaster.setFromCamera(ndc, sceneCtx.camera);
@@ -435,51 +556,68 @@ canvas.addEventListener('pointerdown', (e) => {
     camDragging = true;
     clearHover();
     canvas.style.cursor = 'move';
-  } else if (e.button === 0) {
-    downPos = { x: e.clientX, y: e.clientY };
   }
 });
 
 canvas.addEventListener('pointermove', (e) => {
   lastMouse = { x: e.clientX, y: e.clientY };
-  if (camDragging) return;
-  updateHover(e.clientX, e.clientY);
+  const pointer = activePointers.get(e.pointerId);
+  if (pointer) {
+    const slop = e.pointerType === 'mouse' ? 5 : 10;
+    if (Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) >= slop) {
+      pointer.moved = true;
+      clearHover();
+    }
+    if (pointer.moved) return;
+  }
+  if (buildMode === 'quick' && e.pointerType === 'mouse' && !camDragging) updateHover(e.clientX, e.clientY);
 });
 
 canvas.addEventListener('pointerup', (e) => {
+  const pointer = activePointers.get(e.pointerId);
+  activePointers.delete(e.pointerId);
   if (e.button === 2) {
-    const panelKeyHit = rightDown
-      && Math.hypot(e.clientX - rightDown.x, e.clientY - rightDown.y) < 5
-      ? rightDown.panelKey
-      : null;
+    const panelKeyHit = rightDown && Math.hypot(e.clientX - rightDown.x, e.clientY - rightDown.y) < 5 ? rightDown.panelKey : null;
     rightDown = null;
     camDragging = false;
     canvas.style.cursor = 'default';
     if (panelKeyHit) {
       world.removePanel(panelKeyHit);
       clearHover();
+      clearNormalCandidates();
       refresh();
-    } else {
+    } else if (buildMode === 'quick') {
       updateHover(e.clientX, e.clientY);
     }
-    return;
-  }
-  if (e.button === 1) {
+  } else if (e.button === 1) {
     camDragging = false;
     canvas.style.cursor = 'default';
-    updateHover(e.clientX, e.clientY);
-    return;
+    if (buildMode === 'quick') updateHover(e.clientX, e.clientY);
+  } else if (e.button === 0 && pointer && !pointer.moved && !camDragging && !touchGesture) {
+    if (buildMode === 'quick') handleClick();
+    else handleNormalTap(e.clientX, e.clientY);
   }
-  if (e.button === 0 && downPos) {
-    const moved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
-    downPos = null;
-    if (moved < 5) handleClick();
+  if (activePointers.size === 0) {
+    camDragging = false;
+    touchGesture = false;
   }
 });
 
+function cancelPointer(e: PointerEvent): void {
+  if (!activePointers.has(e.pointerId)) return;
+  activePointers.delete(e.pointerId);
+  rightDown = null;
+  camDragging = false;
+  // A cancellation terminates the current gesture. Only an outstanding
+  // companion pointer keeps the multi-touch tap guard alive.
+  touchGesture = activePointers.size > 0;
+  clearHover();
+}
+canvas.addEventListener('pointercancel', cancelPointer);
+canvas.addEventListener('lostpointercapture', cancelPointer);
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
-// Wheel zoom is camera interaction too: drop the hover ghost while zooming.
+// Wheel zoom is camera interaction too: drop only the transient quick ghost.
 canvas.addEventListener('wheel', () => { clearHover(); renderFrame(); }, { passive: true });
 
 window.addEventListener('resize', () => {
@@ -522,15 +660,21 @@ function renderFrame(): void {
   rendering = false;
 }
 sceneCtx.controls.addEventListener('change', () => {
-  if (camDragging) clearHover();
+  if (activePointers.size > 0) {
+    camDragging = true;
+    for (const pointer of activePointers.values()) pointer.moved = true;
+    clearHover();
+  }
   renderFrame();
 });
 
 function debugInfo(): {
+  mode: BuildMode;
   hoverPanelKey: string | null;
   edgeHover: unknown;
   ghostPlacement: unknown;
   ghostInvalid: boolean;
+  normalCandidateCount: number;
   pickedPanel: string | null;
   hasTablePoint: boolean;
 } {
@@ -538,17 +682,19 @@ function debugInfo(): {
   raycaster.setFromCamera(ndc, sceneCtx.camera);
   const picked = pick();
   return {
+    mode: buildMode,
     hoverPanelKey,
     edgeHover,
     ghostPlacement,
     ghostInvalid,
+    normalCandidateCount: normalCandidates.size,
     pickedPanel: picked.panelKeyHit,
     hasTablePoint: picked.tablePoint !== null,
   };
 }
 
 
- (window as unknown as Record<string, unknown>).__builder = { world, sceneCtx, debug: { info: debugInfo, raycaster, ndc, setNdc, updateHover, get anchors() { return connectorAnchors; } } };
+ (window as unknown as Record<string, unknown>).__builder = { world, sceneCtx, debug: { info: debugInfo, raycaster, ndc, setNdc, updateHover, get anchors() { return connectorAnchors; }, get gesture() { return { camDragging, touchGesture, activePointerCount: activePointers.size, normalCandidateCount: normalCandidates.size }; } } };
 
 // Swap procedural fallback panels for the Blender models once loaded. Material
 // colors never write back into World: panel-type colors are user state and may
