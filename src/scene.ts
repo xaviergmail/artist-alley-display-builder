@@ -6,11 +6,10 @@ import panelsUrl from '../assets/Panels.glb?url';
 import {
   STEP,
   panelCenter,
-  panelCorners,
-  panelKey,
   parsePointKey,
-  sharedPanelEdge,
+  panelKey,
   type Connector,
+  type Corner,
   type PanelType,
   type Placement,
   type World,
@@ -569,36 +568,21 @@ export class SceneCtx {
     this.hoverOutline.visible = true;
   }
 
-  setCandidateGhosts(candidates: Array<{ placement: Placement; type: PanelType; anchor?: Placement }>): void {
+  setCandidateGhosts(candidates: Array<{ placement: Placement; type: PanelType; edge?: [Corner, Corner] }>): void {
     clearGroup(this.markerGroup);
     for (const candidate of candidates) {
       const obj = buildPanelContent(candidate.type, true);
       placePanel(obj, candidate.placement);
       obj.scale.setScalar(0.5);
-      if (candidate.anchor) {
+      if (candidate.edge) {
+        const edge = candidate.edge;
         const center = panelCenter(candidate.placement);
-        const shared = sharedPanelEdge(candidate.placement, candidate.anchor);
-        if (shared) {
-          const edgeMidpoint = [0, 1, 2].map((axis) => (shared[0][axis] + shared[1][axis]) * STEP / 2) as [number, number, number];
-          obj.position.set(
-            (center[0] + edgeMidpoint[0]) / 2,
-            (center[1] + edgeMidpoint[1]) / 2,
-            (center[2] + edgeMidpoint[2]) / 2,
-          );
-        } else {
-          // Corner-only joins remain legal. Press their half-scale preview
-          // toward the common connector point instead of centering it.
-          const corner = panelCorners(candidate.placement).find((candidateCorner) =>
-            panelCorners(candidate.anchor!).some((anchorCorner) =>
-              candidateCorner.every((value, axis) => value === anchorCorner[axis]),
-            ),
-          );
-          if (corner) obj.position.set(
-            (center[0] + corner[0] * STEP) / 2,
-            (center[1] + corner[1] * STEP) / 2,
-            (center[2] + corner[2] * STEP) / 2,
-          );
-        }
+        const edgeMidpoint = [0, 1, 2].map((axis) => (edge[0][axis] + edge[1][axis]) * STEP / 2) as [number, number, number];
+        obj.position.set(
+          (center[0] + edgeMidpoint[0]) / 2,
+          (center[1] + edgeMidpoint[1]) / 2,
+          (center[2] + edgeMidpoint[2]) / 2,
+        );
       }
       obj.userData.candidateKey = panelKey(candidate.placement);
       this.markerGroup.add(obj);

@@ -5,11 +5,10 @@ import {
   STEP,
   World,
   panelCenter,
-  panelCorners,
   panelKey,
-  pointKey,
   sharedPanelEdge,
   type AssemblyState,
+  type Corner,
   type Placement,
 } from './model';
 import { SceneCtx, loadPanelAssets, connectorAnchors } from './scene';
@@ -126,7 +125,8 @@ let touchGesture = false;
 const activePointers = new Map<number, { x: number; y: number; moved: boolean; type: string }>();
 interface NormalCandidate {
   placement: Placement;
-  anchor: Placement;
+  // Shared edge with the selected panel; previews press toward its midpoint.
+  edge: [Corner, Corner];
 }
 
 const normalCandidates = new Map<string, NormalCandidate>();
@@ -255,14 +255,12 @@ function showNormalCandidates(candidates: NormalCandidate[]): void {
 }
 
 function candidatesForPanel(panel: Placement): NormalCandidate[] {
-  // Normal mode mirrors quick build: only squares sharing a real edge with a
-  // placed panel (coplanar continuation or perpendicular along that edge).
+  // Normal mode mirrors quick build: only squares sharing a real edge with the
+  // selected panel (coplanar continuation or perpendicular along that edge).
   // Corner-only diagonals stay placeable elsewhere but are never previewed.
-  const corners = new Set(panelCorners(panel).map(pointKey));
   return world.candidates().flatMap((candidate) => {
-    if (!panelCorners(candidate).some((corner) => corners.has(pointKey(corner)))) return [];
-    const anchor = [panel, ...world.panels.values()].find((placed) => sharedPanelEdge(candidate, placed));
-    return anchor ? [{ placement: candidate, anchor }] : [];
+    const anchor = sharedPanelEdge(candidate, panel);
+    return anchor ? [{ placement: candidate, edge: anchor }] : [];
   });
 }
 
