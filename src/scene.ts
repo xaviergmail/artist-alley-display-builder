@@ -30,7 +30,12 @@ let panelAssets: Record<'grid' | 'outline' | 'plain', PanelAsset> | null = null;
 // The Connector mesh from the GLB, canonical orientation: plate in XY,
 // cross-side structure protruding toward -z, tangential (B*) side toward +z.
 let connectorAsset: PanelAsset | null = null;
-
+// Anchor profile extracted from the GLB armatures (see loadPanelAssets).
+export interface ConnectorAnchors {
+  cross: string[];
+  bottom: string[];
+}
+export let connectorAnchors: ConnectorAnchors | null = null;
 // Resolves with each kind's primary material hex color (for sidebar swatches),
 // or null if the model could not be loaded.
 export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', string> | null> {
@@ -102,6 +107,23 @@ export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', 
           connectorAsset = { geometry: cgeo.scale(cscale, cscale, cscale), materials: [cmat] };
         }
         panelAssets = out;
+
+        // Armature slot data: the connector's 8 mount anchors (4 cross-side
+        // SW/NW/NE/SE for in-plane panels + 4 bottom-tangential B* for the
+        // perpendicular axis) and the panel's 4 corner bones. The exported
+        // anchor bones carry orientation frames only - their rest positions
+        // all sit at the armature origin - so the runtime slot matrix in
+        // model.ts is geometric; this profile asserts the asset still
+        // matches the matrix's 4+4 structure.
+        const anchors = (gltf.scene.getObjectByName('Connector_Connections')?.children ?? []).map((b) => b.name);
+        const panelBones = (gltf.scene.getObjectByName('Panels_Connections')?.children ?? []).map((b) => b.name);
+        const cross = ['SW', 'NW', 'NE', 'SE'];
+        const bottom = ['BSW', 'BNW', 'BNE', 'BSE'];
+        if (anchors.length === 8 && panelBones.length === 4 && cross.every((n) => anchors.includes(n)) && bottom.every((n) => anchors.includes(n))) {
+          connectorAnchors = { cross, bottom };
+        } else {
+          console.warn('Panels.glb armature does not match the 4+4 connector slot matrix; using geometric fallback', anchors, panelBones);
+        }
         resolve(colors);
       } catch (err) {
         fail(err);

@@ -8,7 +8,7 @@ import {
   panelMaxCorner,
   type Placement,
 } from './model';
-import { SceneCtx, loadPanelAssets } from './scene';
+import { SceneCtx, loadPanelAssets, connectorAnchors } from './scene';
 import { UI } from './ui';
 
 const viewport = document.getElementById('viewport');
@@ -471,7 +471,7 @@ function debugInfo(): {
 
 sceneCtx.controls.addEventListener('change', renderFrame);
 
- (window as unknown as Record<string, unknown>).__builder = { world, sceneCtx, debug: { info: debugInfo, raycaster, ndc, setNdc, updateHover } };
+ (window as unknown as Record<string, unknown>).__builder = { world, sceneCtx, debug: { info: debugInfo, raycaster, ndc, setNdc, updateHover, get anchors() { return connectorAnchors; } } };
 
 // Swap procedural fallback panels for the Blender models once loaded, and
 // align the default sidebar swatches with the actual model materials.
