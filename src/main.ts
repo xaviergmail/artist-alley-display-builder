@@ -234,7 +234,9 @@ function candidatesForPanel(panel: Placement): NormalCandidate[] {
   const corners = new Set(panelCorners(panel).map(pointKey));
   return world.candidates().flatMap((candidate) => {
     if (!panelCorners(candidate).some((corner) => corners.has(pointKey(corner)))) return [];
-    const anchor = [panel, ...world.panels.values()].find((placed) => sharedPanelEdge(candidate, placed));
+    const attached = [panel, ...world.panels.values()];
+    const anchor = attached.find((placed) => sharedPanelEdge(candidate, placed))
+      ?? attached.find((placed) => panelCorners(candidate).some((corner) => panelCorners(placed).some((other) => pointKey(corner) === pointKey(other))));
     return anchor ? [{ placement: candidate, anchor }] : [];
   });
 }

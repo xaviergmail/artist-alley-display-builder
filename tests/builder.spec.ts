@@ -431,7 +431,7 @@ test('normal mode places a table panel in one click', async ({ page }) => {
   expect(state.connectors).toEqual(expect.arrayContaining([expect.objectContaining({ plane: 'y', sign: 1, turn: 2 })]));
 });
 
-test('normal mode renders stable, edge-pressed ghosts only for edge-sharing placements', async ({ page }) => {
+test('normal mode renders stable edge and corner-pressed ghosts for every legal contact', async ({ page }) => {
   await page.locator('.quick-mode-btn').click();
   await clickProjected(page, 'b.sceneCtx.tableTop');
   await clickProjected(page, 'b.sceneCtx.panelGroup.children[0]');
@@ -445,18 +445,18 @@ test('normal mode renders stable, edge-pressed ghosts only for edge-sharing plac
     const key = (p: any) => `${p.plane}:${p.i},${p.j},${p.k}`;
     const candidates = [...b.world.candidates()];
     const markers = b.sceneCtx.markerGroup.children;
-    const allAnchored = markers.every((marker: any) => {
+    const contactCounts = markers.map((marker: any) => {
       const candidate = candidates.find((placement: any) => key(placement) === marker.userData.candidateKey);
-      return [...b.world.panels.values()].some((panel: any) =>
-        corners(candidate).filter((corner: number[]) => corners(panel).some((other: number[]) => corner.join(',') === other.join(','))).length === 2,
-      );
+      return Math.max(...[...b.world.panels.values()].map((panel: any) =>
+        corners(candidate).filter((corner: number[]) => corners(panel).some((other: number[]) => corner.join(',') === other.join(','))).length,
+      ));
     });
     return {
       selected: b.world.selectedKey,
       selectionVisible: b.sceneCtx.selectionHelper.visible,
       scales: markers.map((marker: any) => marker.scale.toArray()),
       positions: Object.fromEntries(markers.map((marker: any) => [marker.userData.candidateKey, marker.position.toArray()])),
-      allAnchored,
+      contactCounts,
     };
   });
   await page.locator('.type-btn[data-type-id="grid"]').click();
@@ -466,7 +466,9 @@ test('normal mode renders stable, edge-pressed ghosts only for edge-sharing plac
   expect(before.selected).not.toBeNull();
   expect(before.selectionVisible).toBe(false);
   expect(before.scales.every((scale: number[]) => scale.every((value) => value === 0.5))).toBe(true);
-  expect(before.allAnchored).toBe(true);
+  expect(before.contactCounts.every((count: number) => count === 1 || count === 2)).toBe(true);
+  expect(before.contactCounts).toContain(1);
+  expect(before.contactCounts).toContain(2);
   expect(after).toEqual(before.positions);
 });
 

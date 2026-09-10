@@ -6,6 +6,7 @@ import panelsUrl from '../assets/Panels.glb?url';
 import {
   STEP,
   panelCenter,
+  panelCorners,
   panelKey,
   parsePointKey,
   sharedPanelEdge,
@@ -451,14 +452,27 @@ export class SceneCtx {
       placePanel(obj, candidate.placement);
       obj.scale.setScalar(0.5);
       if (candidate.anchor) {
+        const center = panelCenter(candidate.placement);
         const shared = sharedPanelEdge(candidate.placement, candidate.anchor);
         if (shared) {
-          const center = panelCenter(candidate.placement);
           const edgeMidpoint = [0, 1, 2].map((axis) => (shared[0][axis] + shared[1][axis]) * STEP / 2) as [number, number, number];
           obj.position.set(
             (center[0] + edgeMidpoint[0]) / 2,
             (center[1] + edgeMidpoint[1]) / 2,
             (center[2] + edgeMidpoint[2]) / 2,
+          );
+        } else {
+          // Corner-only joins remain legal. Press their half-scale preview
+          // toward the common connector point instead of centering it.
+          const corner = panelCorners(candidate.placement).find((candidateCorner) =>
+            panelCorners(candidate.anchor!).some((anchorCorner) =>
+              candidateCorner.every((value, axis) => value === anchorCorner[axis]),
+            ),
+          );
+          if (corner) obj.position.set(
+            (center[0] + corner[0] * STEP) / 2,
+            (center[1] + corner[1] * STEP) / 2,
+            (center[2] + corner[2] * STEP) / 2,
           );
         }
       }
