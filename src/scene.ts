@@ -93,12 +93,14 @@ export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', 
         // Connector hub mesh (no children, origin = the connection point:
         // the bbox is asymmetric toward the cross-side protrusion, so
         // DO NOT recenter - the origin must stay on the lattice corner).
-        // The GLB is already face-up in the app frame: plate in XZ and
-        // cross-side structure toward +Y. Keep that native orientation.
+        // Unlike panels, this mesh is authored Z-up: its raw plate is XY and
+        // the cross side protrudes toward -Z. Convert it into the app's Y-up
+        // canonical frame (plate XZ, cross +Y) before applying ORIENT_QUATS.
         const connNode = gltf.scene.getObjectByName('Connector') as THREE.Mesh | undefined;
         if (connNode) {
           connNode.updateMatrixWorld(true);
           const cgeo = connNode.geometry.clone();
+          cgeo.rotateX(Math.PI / 2);
           const cmat = Array.isArray(connNode.material) ? connNode.material[0] : connNode.material;
           const cscale = STEP / 30;
           connectorAsset = { geometry: cgeo.scale(cscale, cscale, cscale), materials: [cmat] };
@@ -196,10 +198,10 @@ function placePanel(obj: THREE.Group, p: Placement): void {
   if (p.plane === 'z') obj.rotation.x = Math.PI / 2;
 }
 
-// The native GLB connector is face-up: plate in XZ and cross-side structure
-// toward +Y. Placed orientation rotates its cross axis (0,1,0) onto the
-// connector's cross-panel direction (plate normal * sign). All six targets
-// are 90-degree-multiple rotations, so the slot pattern stays lattice-aligned.
+// After Z-up -> Y-up normalization the connector plate is in XZ and its
+// cross-side structure points toward +Y. Placed orientation rotates that
+// cross axis (0,1,0) onto the connector's cross-panel direction (plate normal
+// * sign). All six targets stay aligned with the lattice.
 const ORIENT_QUATS: Record<string, THREE.Quaternion> = {
   'y1': new THREE.Quaternion(),
   'y-1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI),
