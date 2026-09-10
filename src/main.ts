@@ -384,11 +384,19 @@ function refresh(): void {
 
 function placePanelAt(p: Placement): void {
   if (!world.canPlace(p)) return;
-  world.place(p, world.activeTypeId);
-  world.selectedKey = null;
-  clearNormalCandidates();
-  refresh();
-  if (buildMode === 'quick') updateHover(lastMouse.x, lastMouse.y);
+  const panel = world.place(p, world.activeTypeId);
+  if (buildMode === 'quick') {
+    world.selectedKey = null;
+    clearNormalCandidates();
+    refresh();
+    updateHover(lastMouse.x, lastMouse.y);
+  } else {
+    // Keep building: select the new panel so its edge candidates preview
+    // immediately and the next click continues the chain.
+    world.selectedKey = panelKey(panel);
+    refresh();
+    showNormalCandidates(candidatesForPanel(p));
+  }
 }
 
 function assemblyJson(): string {
