@@ -152,7 +152,10 @@ export function loadPanelAssets(): Promise<ModelMaterialDefaults | null> {
 
         for (const material of [...panelSources, connectorSource]) material.userData[SHARED_MATERIAL] = true;
         modelMaterials = {
-          panel: sharedClone(namedMaterial(panelSources, ['Panel', 'Black Plastic'])),
+          // No alias here: panel meshes must come from a real panel material.
+          // A stale export would fail loudly (procedural fallback) rather
+          // than paint panels with the connector's black plastic.
+          panel: sharedClone(namedMaterial(panelSources, ['Panel'])),
           metal: sharedClone(namedMaterial(panelSources, ['Metal', 'Black'])),
           connector: sharedClone(connectorSource),
         };
