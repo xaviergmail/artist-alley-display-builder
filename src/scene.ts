@@ -146,13 +146,13 @@ export function loadPanelAssets(): Promise<ModelMaterialDefaults | null> {
         const cgeo = connNode.geometry.clone();
         cgeo.rotateX(Math.PI / 2);
         const cmat = Array.isArray(connNode.material) ? connNode.material[0] : connNode.material;
-        const connectorSource = namedMaterial([cmat], ['Connector', 'Black Plastic Connector']);
+        const connectorSource = namedMaterial([cmat], ['Connector', 'Black Plastic Connector', 'Black Plastic']);
         const cscale = STEP / 30;
         connectorAsset = { geometry: cgeo.scale(cscale, cscale, cscale), materials: [connectorSource] };
 
         for (const material of [...panelSources, connectorSource]) material.userData[SHARED_MATERIAL] = true;
         modelMaterials = {
-          panel: sharedClone(namedMaterial(panelSources, ['Panel'])),
+          panel: sharedClone(namedMaterial(panelSources, ['Panel', 'Black Plastic'])),
           metal: sharedClone(namedMaterial(panelSources, ['Metal', 'Black'])),
           connector: sharedClone(connectorSource),
         };
