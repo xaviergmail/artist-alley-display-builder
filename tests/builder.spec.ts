@@ -249,3 +249,54 @@ test('perpendicular placement shares a corner and serves both panel planes', asy
   const connectors = await page.evaluate(() => [...(window as unknown as { __builder: Builder }).__builder.world.connectors.entries()]);
   expect(connectors.length).toBe(4);
 });
+
+test('invalid edge candidate shows a red ghost and clicking it is rejected', async ({ page }) => {
+  // Build the corner that cannot host another panel: three walls + deck around
+  // one lattice corner, then try to add a fourth panel whose connector would
+  // need two opposite perpendicular extensions.
+  const result = await page.evaluate(() => {
+    const b = (window as unknown as { __builder: any }).__builder;
+    const viewport = document.getElementById('viewport')!;
+    const canvas = b.sceneCtx.renderer.domElement as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const drive = (wx: number, wy: number, wz: number, click: boolean) => {
+      const out = { x: 0, y: 0, visible: false };
+      b.sceneCtx.projectToScreen([wx, wy, wz], out, viewport);
+      if (!out.visible) return null;
+      const opts = { bubbles: true, cancelable: true, clientX: Math.round(out.x + rect.left), clientY: Math.round(out.y + rect.top), button: 0, pointerId: 1 };
+      canvas.dispatchEvent(new PointerEvent('pointermove', opts));
+      if (click) {
+        canvas.dispatchEvent(new PointerEvent('pointerdown', opts));
+        canvas.dispatchEvent(new PointerEvent('pointerup', opts));
+      }
+      return b.debug.info();
+    };
+    drive(42, 0, 0, true); // standing panel
+    drive(42, 12, 0, true); // stacked wall
+    drive(42, 12, 2, false); // bottom edge
+    drive(42, 12, 4, false); // swing +z -> deck
+    drive(42, 12, 4, true); // place deck
+    drive(36, 18, 0, false); // left edge
+    drive(36, 18, 5, false); // swing +z -> perpendicular wall
+    drive(36, 18, 5, true);
+    const h = drive(36, 18, 0, false);
+    if (h && h.ghostPlacement) {
+      const g = h.ghostPlacement as { plane: string; i: number; j: number; k: number };
+      drive(g.i * 12 + 6, g.j * 12 + 6, g.k * 12 + 6, true); // coplanar filler
+    }
+    drive(36, 18, 2, false); // x-wall bottom edge
+    drive(36, 18, -3, false); // swing -z -> invalid candidate
+    const mats: string[] = [];
+    b.sceneCtx.ghostGroup.children.forEach((root) => {
+      (root as unknown as { traverse: (cb: (o: { material?: { color: { getHexString(): string } } }) => void }).traverse)((o) => {
+        if (o.material) mats.push(o.material.color.getHexString());
+      });
+    });
+    const before = b.world.panels.size;
+    drive(36, 18, -3, true);
+    return { mats, rejected: b.world.panels.size === before, panels: b.world.panels.size };
+  });
+  expect(result.mats).toContain('ef4444');
+  expect(result.rejected).toBe(true);
+  expect(result.panels).toBe(5);
+});

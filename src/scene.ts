@@ -17,6 +17,7 @@ export interface GhostSpec {
   placement: Placement;
   type: PanelType;
   connectors: Map<string, Connector>;
+  invalid?: boolean;
 }
 
 // Blender-exported panel models (assets/Panels.glb), one per panel kind.
@@ -26,6 +27,9 @@ interface PanelAsset {
   materials: THREE.Material[];
 }
 let panelAssets: Record<'grid' | 'outline' | 'plain', PanelAsset> | null = null;
+// The Connector mesh from the GLB, canonical orientation: plate in XY,
+// cross-side structure protruding toward -z, tangential (B*) side toward +z.
+let connectorAsset: PanelAsset | null = null;
 
 // Resolves with each kind's primary material hex color (for sidebar swatches),
 // or null if the model could not be loaded.
@@ -81,6 +85,22 @@ export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', 
           out[kind] = { geometry: geo, materials: mats };
           colors[kind] = '#' + (mats[0] as THREE.MeshStandardMaterial).color.getHexString();
         }
+        // Connector hub mesh (no children). Canonicalize like the panels
+        // (thickness axis -> app Z is wrong for the hub: keep its own frame):
+        // recenter on the hub, scale model units (panel edge = 30) to inches.
+        const connNode = gltf.scene.getObjectByName('Connector') as THREE.Mesh | undefined;
+        if (connNode) {
+          connNode.updateMatrixWorld(true);
+          const cgeo = connNode.geometry.clone();
+          const cmat = Array.isArray(connNode.material) ? connNode.material[0] : connNode.material;
+          cgeo.computeBoundingBox();
+          const cbb = cgeo.boundingBox!;
+          const ccenter = new THREE.Vector3();
+          cbb.getCenter(ccenter);
+          cgeo.translate(-ccenter.x, -ccenter.y, -ccenter.z);
+          const cscale = STEP / 30;
+          connectorAsset = { geometry: cgeo.scale(cscale, cscale, cscale), materials: [cmat] };
+        }
         panelAssets = out;
         resolve(colors);
       } catch (err) {
@@ -94,6 +114,7 @@ export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', 
 }
 const THICK = 0.5;
 const GHOST = 0x3b82f6;
+const GHOST_BAD = 0xef4444;
 const TABLE_DEPTH = 24;
 const TABLE_TOP_T = 1.5;
 const FLOOR_Y = -30;
@@ -115,19 +136,18 @@ function clearGroup(group: THREE.Group): void {
   }
 }
 
-function ghostMaterial(): THREE.MeshBasicMaterial {
-  return new THREE.MeshBasicMaterial({ color: GHOST, transparent: true, opacity: 0.35, depthWrite: false });
+function ghostMaterial(invalid = false): THREE.MeshBasicMaterial {
+  return new THREE.MeshBasicMaterial({ color: invalid ? GHOST_BAD : GHOST, transparent: true, opacity: 0.35, depthWrite: false });
 }
-
 function hitMaterial(): THREE.MeshBasicMaterial {
   return new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
 }
 
 // Panel content in local coords: x/y span [-6, 6], thickness along local z.
-function buildPanelContent(type: PanelType, ghost: boolean): THREE.Group {
+function buildPanelContent(type: PanelType, ghost: boolean, invalid = false): THREE.Group {
   const g = new THREE.Group();
   if (ghost) {
-    g.add(new THREE.Mesh(new THREE.BoxGeometry(STEP, STEP, THICK), ghostMaterial()));
+    g.add(new THREE.Mesh(new THREE.BoxGeometry(STEP, STEP, THICK), ghostMaterial(invalid)));
   } else {
     const asset = panelAssets?.[type.kind];
     if (asset) {
@@ -157,57 +177,39 @@ function placePanel(obj: THREE.Group, p: Placement): void {
   if (p.plane === 'y') obj.rotation.x = -Math.PI / 2;
 }
 
-// Real-world scale: panels are 30 cm squares; the connector is ~32 mm across.
-// The whole assembly (plate + ribs) stays inside that envelope.
-const CONN = 1.26; // inches
-const CONN_T = 0.16;
-const RIB_L = 1.1;
-const RIB_W = 0.3;
-const RIB_T = 0.1;
-function buildConnector(conn: Connector, corner: [number, number, number], ghost: boolean): THREE.Group {
+// The GLB connector, canonical orientation: cross-side structure protrudes
+// toward -Z, tangential (B*) side toward +Z. Placed orientation rotates the
+// canonical cross axis (0,-1,0) onto the connector's cross-panel direction
+// (plate normal * sign). All six targets are 90-degree-multiple rotations,
+// so the slot pattern stays aligned with the lattice.
+const ORIENT_QUATS: Record<string, THREE.Quaternion> = {
+  'y1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI),
+  'y-1': new THREE.Quaternion(),
+  'z1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2),
+  'z-1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2),
+  'x1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2),
+  'x-1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -Math.PI / 2),
+};
+
+function buildConnector(conn: Connector, corner: [number, number, number], ghost: boolean, invalid = false): THREE.Group {
   const g = new THREE.Group();
-  const mat = ghost ? ghostMaterial() : new THREE.MeshStandardMaterial({ color: 0x2b2f33, roughness: 0.5, metalness: 0.4 });
-  const dims: Record<Connector['plane'], [number, number, number]> = {
-    x: [CONN_T, CONN, CONN],
-    y: [CONN, CONN_T, CONN],
-    z: [CONN, CONN, CONN_T],
-  };
-  const plate = new THREE.Mesh(new THREE.BoxGeometry(...dims[conn.plane]), mat);
-  g.add(plate);
-  // Crossed ribs on the perpendicular face (the side perpendicular panels slot into).
-  const off = conn.sign * (CONN_T / 2 + RIB_T / 2);
-  const make = (sx: number, sy: number, sz: number, x: number, y: number, z: number) => {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
-    m.position.set(x, y, z);
-    g.add(m);
-  };
-  if (conn.plane === 'z') {
-    make(RIB_L, RIB_W, RIB_T, 0, 0, off);
-    make(RIB_W, RIB_L, RIB_T, 0, 0, off);
-  } else if (conn.plane === 'y') {
-    make(RIB_L, RIB_T, RIB_W, 0, off, 0);
-    make(RIB_W, RIB_T, RIB_L, 0, off, 0);
+  if (connectorAsset) {
+    const mat = ghost
+      ? new THREE.MeshBasicMaterial({ color: invalid ? GHOST_BAD : GHOST, transparent: true, opacity: 0.45, depthWrite: false })
+      : (connectorAsset.materials[0] as THREE.MeshStandardMaterial).clone();
+    const mesh = new THREE.Mesh(connectorAsset.geometry.clone(), mat);
+    mesh.quaternion.copy(ORIENT_QUATS[`${conn.plane}${conn.sign}`]);
+    g.add(mesh);
   } else {
-    make(RIB_T, RIB_L, RIB_W, off, 0, 0);
-    make(RIB_T, RIB_W, RIB_L, off, 0, 0);
+    // Fallback while the model loads: small dark cube at the hub.
+    g.add(new THREE.Mesh(
+      new THREE.BoxGeometry(1.5, 1.5, 1.5),
+      ghost
+        ? new THREE.MeshBasicMaterial({ color: invalid ? GHOST_BAD : GHOST, transparent: true, opacity: 0.45, depthWrite: false })
+        : new THREE.MeshStandardMaterial({ color: 0x2b2f33, roughness: 0.5, metalness: 0.4 }),
+    ));
   }
   g.position.set(corner[0] * STEP, corner[1] * STEP, corner[2] * STEP);
-  return g;
-}
-
-function buildMarker(placement: Placement): THREE.Group {
-  const g = new THREE.Group();
-  const visual = new THREE.Mesh(
-    new THREE.SphereGeometry(2.2, 12, 10),
-    new THREE.MeshBasicMaterial({ color: GHOST, transparent: true, opacity: 0.45, depthWrite: false })
-  );
-  const hit = new THREE.Mesh(new THREE.SphereGeometry(4, 8, 6), hitMaterial());
-  const c = panelCenter(placement);
-  const data = { markerPlacement: placement };
-  visual.userData = { ...data };
-  hit.userData = { ...data };
-  g.add(visual, hit);
-  g.position.set(c[0], c[1], c[2]);
   return g;
 }
 
@@ -224,7 +226,6 @@ export class SceneCtx {
   readonly controls: OrbitControls;
   readonly tableGroup = new THREE.Group();
   readonly panelGroup = new THREE.Group();
-  readonly markerGroup = new THREE.Group();
   readonly ghostGroup = new THREE.Group();
   readonly connectorGroup = new THREE.Group();
   tableTop: THREE.Mesh | null = null;
@@ -241,7 +242,6 @@ export class SceneCtx {
 
     this.scene.background = new THREE.Color(0xe8edf2);
     this.camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.5, 4000);
-
     const hemi = new THREE.HemisphereLight(0xffffff, 0x8899aa, 0.9);
     const dir = new THREE.DirectionalLight(0xffffff, 2.2);
     dir.position.set(80, 160, 100);
@@ -261,7 +261,7 @@ export class SceneCtx {
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = FLOOR_Y;
     ground.receiveShadow = true;
-    this.scene.add(ground, this.tableGroup, this.panelGroup, this.connectorGroup, this.markerGroup, this.ghostGroup);
+    this.scene.add(ground, this.tableGroup, this.panelGroup, this.connectorGroup, this.ghostGroup);
 
     this.selectionHelper = new THREE.Mesh(
       new THREE.BoxGeometry(STEP + 1, STEP + 1, THICK + 2),
@@ -310,10 +310,9 @@ export class SceneCtx {
     this.camera.position.set(len / 2 + 70, 65, 110);
   }
 
-  rebuild(world: World, candidates: Placement[]): void {
+  rebuild(world: World): void {
     clearGroup(this.panelGroup);
     clearGroup(this.connectorGroup);
-    clearGroup(this.markerGroup);
     this.panelMeshes.clear();
     for (const panel of world.panels.values()) {
       const type = world.types.get(panel.typeId);
@@ -327,7 +326,6 @@ export class SceneCtx {
     for (const [key, conn] of world.connectors) {
       this.connectorGroup.add(buildConnector(conn, parsePointKey(key), false));
     }
-    for (const s of candidates) this.markerGroup.add(buildMarker(s));
     this.updateSelection(world);
   }
 
@@ -345,11 +343,11 @@ export class SceneCtx {
   setGhost(ghost: GhostSpec | null): void {
     clearGroup(this.ghostGroup);
     if (!ghost) return;
-    const obj = buildPanelContent(ghost.type, true);
+    const obj = buildPanelContent(ghost.type, true, ghost.invalid === true);
     placePanel(obj, ghost.placement);
     this.ghostGroup.add(obj);
     for (const [key, conn] of ghost.connectors) {
-      this.ghostGroup.add(buildConnector(conn, parsePointKey(key), true));
+      this.ghostGroup.add(buildConnector(conn, parsePointKey(key), true, ghost.invalid === true));
     }
   }
 

@@ -113,6 +113,14 @@ export function squaresAtCorner(c: Corner): Placement[] {
   return out;
 }
 
+// A connector is warranted at a corner when panels actually meet there
+// (>= 2 panels sharing the point), or when any panel at the corner lies flat
+// on the table (y-plane deck): those always carry connectors on all 4 corners.
+export function cornerNeedsConnector(panels: Placement[]): boolean {
+  if (panels.length >= 2) return true;
+  return panels.some((p) => p.plane === 'y' && p.j === 0);
+}
+
 // Pick the orientation most likely to work: keep the existing one when it still
 // serves everything; else, when any panel at the corner lies face down
 // (y-plane), give it a horizontal plate so the connector's flat side faces
@@ -120,7 +128,23 @@ export function squaresAtCorner(c: Corner): Placement[] {
 // panel at that corner). Prefer ribs pointing up (+) when both signs are valid.
 export function chooseOrientation(panels: Placement[], c: Corner, existing?: Connector): Connector {
   const valid = validOrientations(panels, c);
-  if (valid.length === 0) throw new Error('no valid connector orientation');
+  if (valid.length === 0) {
+    // Invalid placement (ghost preview of an illegal move): pick the orientation
+    // serving the most panels so a red preview can still be rendered.
+    let best: Connector = { plane: panels[0].plane, sign: 1 };
+    let bestScore = -1;
+    for (const plane of ['x', 'y', 'z'] as const) {
+      for (const sign of [1, -1] as const) {
+        const conn = { plane, sign };
+        const score = panels.filter((p) => connectorServes(conn, p, c)).length;
+        if (score > bestScore) {
+          bestScore = score;
+          best = conn;
+        }
+      }
+    }
+    return best;
+  }
   const anchorPlane = panels[0].plane;
   const hasFaceDown = panels.some((p) => p.plane === 'y');
   const chosen =
@@ -181,7 +205,12 @@ export class World {
     this.panels.set(panelKey(panel), panel);
     for (const c of panelCorners(panel)) {
       const pk = pointKey(c);
-      this.connectors.set(pk, chooseOrientation(this.panelsAt(c), c, this.connectors.get(pk)));
+      const here = this.panelsAt(c);
+      if (cornerNeedsConnector(here)) {
+        this.connectors.set(pk, chooseOrientation(here, c, this.connectors.get(pk)));
+      } else {
+        this.connectors.delete(pk);
+      }
     }
     return panel;
   }
@@ -193,12 +222,11 @@ export class World {
     for (const c of panelCorners(panel)) {
       const pk = pointKey(c);
       const remaining = this.panelsAt(c);
-      if (remaining.length === 0) this.connectors.delete(pk);
+      if (remaining.length === 0 || !cornerNeedsConnector(remaining)) this.connectors.delete(pk);
       else this.connectors.set(pk, chooseOrientation(remaining, c, this.connectors.get(pk)));
     }
     if (this.selectedKey === key) this.selectedKey = null;
   }
-
   retype(key: string, typeId: string): void {
     const panel = this.panels.get(key);
     if (panel) panel.typeId = typeId;

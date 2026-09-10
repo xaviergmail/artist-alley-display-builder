@@ -51,37 +51,106 @@ function userDataValue(o: THREE.Object3D, field: string): unknown {
   return undefined;
 }
 
-function readPlacement(v: unknown): Placement | null {
-  if (typeof v === 'object' && v !== null && 'plane' in v) return v as Placement;
-  return null;
-}
 
 interface PickResult {
-  marker: Placement | null;
   panelKeyHit: string | null;
   tablePoint: THREE.Vector3 | null;
 }
 
 function pick(): PickResult {
+  sceneCtx.scene.updateMatrixWorld(true);
   const panelHit = firstHit([sceneCtx.panelGroup]);
   const key = panelHit ? userDataValue(panelHit.object, 'panelKey') : undefined;
-  const markerHit = firstHit([sceneCtx.markerGroup]);
-  const marker = markerHit ? readPlacement(userDataValue(markerHit.object, 'markerPlacement')) : null;
-  // Whatever the camera sees on top wins: a candidate marker in front of a
-  // panel is clickable; an occluded one defers to the panel (selection).
-  if (marker && (!key || !markerHit || !panelHit || markerHit.distance < panelHit.distance)) {
-    return { marker, panelKeyHit: null, tablePoint: null };
-  }
-  if (typeof key === 'string') return { marker: null, panelKeyHit: key, tablePoint: null };
+  if (typeof key === 'string') return { panelKeyHit: key, tablePoint: null };
   const tableHit = sceneCtx.tableTop ? firstHit([sceneCtx.tableTop]) : null;
-  if (tableHit) return { marker: null, panelKeyHit: null, tablePoint: tableHit.point.clone() };
-  return { marker: null, panelKeyHit: null, tablePoint: null };
+  if (tableHit) return { panelKeyHit: null, tablePoint: tableHit.point.clone() };
+  return { panelKeyHit: null, tablePoint: null };
 }
-let hover: { kind: 'candidate' | 'standing'; placement: Placement } | null = null;
+
 let hoverPanelKey: string | null = null;
+// Edge-hover placement: while the pointer hugs a panel edge, a ghost shows
+// one of the (up to 3) squares adjacent to that edge, chosen by the mouse
+// direction relative to the edge; too far from the edge and it disappears.
+let edgeHover: { panelKey: string; edge: number } | null = null;
+let ghostPlacement: Placement | null = null;
+let ghostInvalid = false;
 let camDragging = false;
 let downPos: { x: number; y: number } | null = null;
 let lastMouse: { x: number; y: number } = { x: 0, y: 0 };
+
+const EDGE_ACTIVATE_PX = 45; // start showing the ghost this close to an edge
+const EDGE_EXTINGUISH_PX = 130; // ghost gone beyond this distance
+const EDGE_SECTOR_DEG = 75; // mouse must sit roughly in a candidate's sector
+
+function cornerWorld(p: Placement, ci: 0 | 1 | 2 | 3): [number, number, number] {
+  const { i, j, k } = p;
+  const dx = p.plane === 'z' && (ci === 1 || ci === 3) ? 1 : 0;
+  const dy = p.plane === 'z' && (ci === 2 || ci === 3) ? 1 : 0;
+  const dz = p.plane === 'y' && (ci === 2 || ci === 3) ? 1 : 0;
+  const dyy = p.plane === 'x' && (ci === 1 || ci === 3) ? 1 : 0;
+  return [(i + dx) * STEP, (j + dy + dyy) * STEP, (k + dz) * STEP];
+}
+
+// The panel's 4 edges as lattice corner pairs.
+function panelEdges(p: Placement): Array<[[number, number, number], [number, number, number]]> {
+  const c = [0, 1, 2, 3].map((n) => cornerWorld(p, n as 0 | 1 | 2 | 3));
+  return [
+    [c[0], c[1]],
+    [c[0], c[2]],
+    [c[1], c[3]],
+    [c[2], c[3]],
+  ];
+}
+
+function projectPx(v: [number, number, number]): { x: number; y: number; visible: boolean } {
+  const out = { x: 0, y: 0, visible: false };
+  sceneCtx.projectToScreen(v, out, viewportEl);
+  return out;
+}
+
+// Nearest panel edge to the mouse in screen space.
+function nearestEdge(p: Placement, mx: number, my: number): { edge: number; dist: number } | null {
+  let best: { edge: number; dist: number } | null = null;
+  const edges = panelEdges(p);
+  for (let n = 0; n < 4; n++) {
+    const a = projectPx(edges[n][0]);
+    const b = projectPx(edges[n][1]);
+    if (!a.visible || !b.visible) continue;
+    const ax = b.x - a.x, ay = b.y - a.y;
+    const len2 = ax * ax + ay * ay;
+    let t = len2 > 0 ? ((mx - a.x) * ax + (my - a.y) * ay) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const dx = mx - (a.x + t * ax), dy = my - (a.y + t * ay);
+    const dist = Math.hypot(dx, dy);
+    if (!best || dist < best.dist) best = { edge: n, dist };
+  }
+  return best;
+}
+
+// Squares adjacent to one of the panel's edges: the coplanar continuation
+// plus the two perpendicular squares sharing the edge (one per face side).
+function edgeNeighbors(p: Placement, edge: number): Placement[] {
+  const { plane, i, j, k } = p;
+  if (plane === 'z') {
+    // edges: 0 bottom (x, y=j), 1 left (y, x=i), 2 right (y, x=i+1), 3 top (x, y=j+1)
+    if (edge === 0) return [{ plane: 'z', i, j: j - 1, k }, { plane: 'y', i, j, k: k - 1 }, { plane: 'y', i, j, k }];
+    if (edge === 1) return [{ plane: 'z', i: i - 1, j, k }, { plane: 'x', i, j, k: k - 1 }, { plane: 'x', i, j, k }];
+    if (edge === 2) return [{ plane: 'z', i: i + 1, j, k }, { plane: 'x', i: i + 1, j, k: k - 1 }, { plane: 'x', i: i + 1, j, k }];
+    return [{ plane: 'z', i, j: j + 1, k }, { plane: 'y', i, j: j + 1, k: k - 1 }, { plane: 'y', i, j: j + 1, k }];
+  }
+  if (plane === 'y') {
+    // 0 (x, z=k), 1 (z, x=i), 2 (z, x=i+1), 3 (x, z=k+1)
+    if (edge === 0) return [{ plane: 'y', i, j, k: k - 1 }, { plane: 'z', i, j: j - 1, k }, { plane: 'z', i, j, k }];
+    if (edge === 1) return [{ plane: 'y', i: i - 1, j, k }, { plane: 'x', i, j: j - 1, k }, { plane: 'x', i, j, k }];
+    if (edge === 2) return [{ plane: 'y', i: i + 1, j, k }, { plane: 'x', i: i + 1, j: j - 1, k }, { plane: 'x', i: i + 1, j, k }];
+    return [{ plane: 'y', i, j, k: k + 1 }, { plane: 'z', i, j: j - 1, k: k + 1 }, { plane: 'z', i, j, k: k + 1 }];
+  }
+  // plane 'x': 0 (y, z=k), 1 (z, y=j), 2 (z, y=j+1), 3 (y, z=k+1)
+  if (edge === 0) return [{ plane: 'x', i, j, k: k - 1 }, { plane: 'z', i: i - 1, j, k }, { plane: 'z', i, j, k }];
+  if (edge === 1) return [{ plane: 'x', i, j: j - 1, k }, { plane: 'y', i: i - 1, j, k }, { plane: 'y', i, j, k }];
+  if (edge === 2) return [{ plane: 'x', i, j: j + 1, k }, { plane: 'y', i: i - 1, j: j + 1, k }, { plane: 'y', i, j: j + 1, k }];
+  return [{ plane: 'x', i, j, k: k + 1 }, { plane: 'z', i: i - 1, j, k: k + 1 }, { plane: 'z', i, j, k: k + 1 }];
+}
 
 function standingCandidates(point: THREE.Vector3): Placement[] {
   const options: Placement[] = [
@@ -113,46 +182,123 @@ function chooseStanding(options: Placement[]): Placement | null {
 }
 
 function clearHover(): void {
-  hover = null;
+  edgeHover = null;
   hoverPanelKey = null;
+  ghostPlacement = null;
+  ghostInvalid = false;
   sceneCtx.setGhost(null);
 }
 
-function updateGhost(): void {
-  if (!hover) {
-    sceneCtx.setGhost(null);
+// Recompute the ghost for the remembered edge: pick the candidate square
+// whose screen direction from the edge midpoint best matches the mouse.
+function updateEdgeGhost(mx: number, my: number): void {
+  ghostPlacement = null;
+  ghostInvalid = false;
+  sceneCtx.setGhost(null);
+  if (!edgeHover) return;
+  const panel = world.panel(edgeHover.panelKey);
+  if (!panel) {
+    edgeHover = null;
     return;
   }
-  const type = world.types.get(world.activeTypeId);
-  if (!type) return;
-  sceneCtx.setGhost({
-    placement: hover.placement,
-    type,
-    connectors: world.orientationsFor(hover.placement),
-  });
+  const edges = panelEdges(panel);
+  const e = edges[edgeHover.edge];
+  const mid = projectPx([(e[0][0] + e[1][0]) / 2, (e[0][1] + e[1][1]) / 2, (e[0][2] + e[1][2]) / 2]);
+  if (!mid.visible) return;
+  const dist = distanceToSegmentPx(mx, my, e);
+  if (dist > EDGE_EXTINGUISH_PX) {
+    edgeHover = null;
+    return;
+  }
+  const mdx = mx - mid.x, mdy = my - mid.y;
+  const mlen = Math.hypot(mdx, mdy);
+  let best: { p: Placement; angle: number } | null = null;
+  if (mlen >= 1) {
+    for (const cand of edgeNeighbors(panel, edgeHover.edge)) {
+      if (world.panel(panelKey(cand))) continue; // occupied: not a candidate
+      const c = panelCenter(cand);
+      const s = projectPx(c);
+      if (!s.visible) continue;
+      const cdx = s.x - mid.x, cdy = s.y - mid.y;
+      const clen = Math.hypot(cdx, cdy);
+      if (clen < 1) continue;
+      const angle = Math.acos(Math.max(-1, Math.min(1, (mdx * cdx + mdy * cdy) / (mlen * clen))));
+      if (!best || angle < best.angle) best = { p: cand, angle };
+    }
+  }
+  if (best && (best.angle * 180) / Math.PI < EDGE_SECTOR_DEG) {
+    ghostPlacement = best.p;
+  } else if (dist <= EDGE_ACTIVATE_PX) {
+    // Right at the edge (or on the panel beside it): the tangential
+    // (coplanar continuation) square is the default candidate.
+    const coplanar = edgeNeighbors(panel, edgeHover.edge)[0];
+    if (!world.panel(panelKey(coplanar))) ghostPlacement = coplanar;
+  }
+  if (ghostPlacement) {
+    ghostInvalid = !world.canPlace(ghostPlacement);
+    const type = world.types.get(world.activeTypeId);
+    if (type) {
+      sceneCtx.setGhost({
+        placement: ghostPlacement,
+        type,
+        connectors: world.orientationsFor(ghostPlacement),
+        invalid: ghostInvalid,
+      });
+    }
+  }
+}
+
+function distanceToSegmentPx(mx: number, my: number, e: [[number, number, number], [number, number, number]]): number {
+  const a = projectPx(e[0]);
+  const b = projectPx(e[1]);
+  if (!a.visible || !b.visible) return Infinity;
+  const ax = b.x - a.x, ay = b.y - a.y;
+  const len2 = ax * ax + ay * ay;
+  let t = len2 > 0 ? ((mx - a.x) * ax + (my - a.y) * ay) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(mx - (a.x + t * ax), my - (a.y + t * ay));
 }
 
 function updateHover(clientX: number, clientY: number): void {
   setNdc(clientX, clientY);
   raycaster.setFromCamera(ndc, sceneCtx.camera);
   const picked = pick();
-  hoverPanelKey = null;
-  hover = null;
-  if (picked.marker) hover = { kind: 'candidate', placement: picked.marker };
-  else if (picked.panelKeyHit) hoverPanelKey = picked.panelKeyHit;
-  else if (picked.tablePoint) {
-    const s = chooseStanding(standingCandidates(picked.tablePoint));
-    if (s) hover = { kind: 'standing', placement: s };
+  // Edge math works in container-relative pixels (same frame as
+  // projectToScreen), so convert the page-space mouse once here.
+  const rect = canvas.getBoundingClientRect();
+  const mx = clientX - rect.left;
+  const my = clientY - rect.top;
+  hoverPanelKey = picked.panelKeyHit;
+  if (picked.panelKeyHit) {
+    const panel = world.panel(picked.panelKeyHit);
+    const near = panel ? nearestEdge(panel, mx, my) : null;
+    if (near && near.dist < EDGE_ACTIVATE_PX) edgeHover = { panelKey: picked.panelKeyHit, edge: near.edge };
+    else edgeHover = null;
+  } else if (edgeHover) {
+    const panel = world.panel(edgeHover.panelKey);
+    if (panel) {
+      const d = distanceToSegmentPx(mx, my, panelEdges(panel)[edgeHover.edge]);
+      if (d > EDGE_EXTINGUISH_PX) edgeHover = null;
+    } else edgeHover = null;
   }
-  updateGhost();
-  canvas.style.cursor = hover || hoverPanelKey ? 'pointer' : 'default';
+  updateEdgeGhost(mx, my);
+  if (!ghostPlacement && !edgeHover && picked.tablePoint) {
+    const s = chooseStanding(standingCandidates(picked.tablePoint));
+    if (s) {
+      ghostPlacement = s;
+      ghostInvalid = false;
+      const type = world.types.get(world.activeTypeId);
+      if (type) {
+        sceneCtx.setGhost({ placement: s, type, connectors: world.orientationsFor(s), invalid: false });
+      }
+    }
+  }
+  canvas.style.cursor = ghostPlacement || hoverPanelKey ? 'pointer' : 'default';
   renderFrame();
 }
 
-// ---------------------------------------------------------------- actions
-
 function refresh(): void {
-  sceneCtx.rebuild(world, world.candidates());
+  sceneCtx.rebuild(world);
   ui.updateTypes(world.types, world.activeTypeId);
   ui.setTableActive(world.tableLength);
   renderFrame();
@@ -166,8 +312,8 @@ function placePanelAt(p: Placement): void {
   updateHover(lastMouse.x, lastMouse.y);
 }
 function handleClick(): void {
-  if (hover) {
-    placePanelAt(hover.placement);
+  if (ghostPlacement) {
+    if (!ghostInvalid) placePanelAt(ghostPlacement);
     return;
   }
   if (hoverPanelKey) {
@@ -186,7 +332,7 @@ const ui = new UI(sidebar, viewport, {
     world.activeTypeId = id;
     if (world.selectedKey) world.retype(world.selectedKey, id);
     refresh();
-    updateGhost();
+    updateHover(lastMouse.x, lastMouse.y);
   },
   onAddCustom: (color) => {
     world.addCustomType(color);
@@ -297,7 +443,35 @@ function renderFrame(): void {
   updateOverlays();
   rendering = false;
 }
+sceneCtx.controls.addEventListener('change', () => {
+  if (camDragging) clearHover();
+  renderFrame();
+});
+
+function debugInfo(): {
+  hoverPanelKey: string | null;
+  edgeHover: unknown;
+  ghostPlacement: unknown;
+  ghostInvalid: boolean;
+  pickedPanel: string | null;
+  hasTablePoint: boolean;
+} {
+  setNdc(lastMouse.x, lastMouse.y);
+  raycaster.setFromCamera(ndc, sceneCtx.camera);
+  const picked = pick();
+  return {
+    hoverPanelKey,
+    edgeHover,
+    ghostPlacement,
+    ghostInvalid,
+    pickedPanel: picked.panelKeyHit,
+    hasTablePoint: picked.tablePoint !== null,
+  };
+}
+
 sceneCtx.controls.addEventListener('change', renderFrame);
+
+ (window as unknown as Record<string, unknown>).__builder = { world, sceneCtx, debug: { info: debugInfo, raycaster, ndc, setNdc, updateHover } };
 
 // Swap procedural fallback panels for the Blender models once loaded, and
 // align the default sidebar swatches with the actual model materials.
@@ -309,25 +483,3 @@ loadPanelAssets().then((colors) => {
   refresh();
 });
 refresh();
-
-
-function debugInfo(): {
-  hover: unknown;
-  hoverPanelKey: string | null;
-  pickedMarker: unknown;
-  pickedPanel: string | null;
-  hasTablePoint: boolean;
-} {
-  setNdc(lastMouse.x, lastMouse.y);
-  raycaster.setFromCamera(ndc, sceneCtx.camera);
-  const picked = pick();
-  return {
-    hover,
-    hoverPanelKey,
-    pickedMarker: picked.marker,
-    pickedPanel: picked.panelKeyHit,
-    hasTablePoint: picked.tablePoint !== null,
-  };
-}
-
- (window as unknown as Record<string, unknown>).__builder = { world, sceneCtx, debug: { info: debugInfo, raycaster, ndc, setNdc } };
