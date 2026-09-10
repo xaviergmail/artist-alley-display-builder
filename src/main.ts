@@ -8,7 +8,7 @@ import {
   panelMaxCorner,
   type Placement,
 } from './model';
-import { SceneCtx } from './scene';
+import { SceneCtx, loadPanelAssets } from './scene';
 import { UI } from './ui';
 
 const viewport = document.getElementById('viewport');
@@ -17,9 +17,9 @@ if (!viewport || !sidebar) throw new Error('missing #viewport/#sidebar');
 const viewportEl: HTMLElement = viewport;
 
 const world = new World();
-world.types.set('plain', { id: 'plain', kind: 'plain', color: '#111318', custom: false });
-world.types.set('grid', { id: 'grid', kind: 'grid', color: '#b9bec4', custom: false });
-world.types.set('outline', { id: 'outline', kind: 'outline', color: '#b9bec4', custom: false });
+world.types.set('plain', { id: 'plain', kind: 'plain', color: '#000000', custom: false });
+world.types.set('grid', { id: 'grid', kind: 'grid', color: '#000000', custom: false });
+world.types.set('outline', { id: 'outline', kind: 'outline', color: '#000000', custom: false });
 
 const sceneCtx = new SceneCtx(viewport);
 const canvas = sceneCtx.renderer.domElement;
@@ -299,6 +299,9 @@ function renderFrame(): void {
 }
 sceneCtx.controls.addEventListener('change', renderFrame);
 
+
+// Swap procedural fallback panels for the Blender models once loaded.
+loadPanelAssets().then(refresh);
 refresh();
 
 

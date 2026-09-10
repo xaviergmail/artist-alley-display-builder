@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import panelsUrl from '../assets/Panels.glb?url';
 import {
   STEP,
   panelCenter,
@@ -14,6 +16,57 @@ export interface GhostSpec {
   placement: Placement;
   type: PanelType;
   connectors: Map<string, Connector>;
+}
+
+// Blender-exported panel models (assets/Panels.glb), one per panel kind.
+// Geometries are normalized at load: rotated so thickness runs along local z,
+// centered on the origin, and scaled to the 12-inch lattice step.
+interface PanelAsset {
+  geometry: THREE.BufferGeometry;
+  material: THREE.Material;
+}
+let panelAssets: Record<'grid' | 'outline' | 'plain', PanelAsset> | null = null;
+
+export function loadPanelAssets(): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  const fail = (err: unknown) => {
+    console.error('failed to load Panels.glb, falling back to procedural panels', String(err));
+    resolve();
+  };
+  new GLTFLoader().load(
+    panelsUrl,
+    (gltf) => {
+      try {
+        const out = {} as Record<'grid' | 'outline' | 'plain', PanelAsset>;
+        for (const kind of ['grid', 'outline', 'plain'] as const) {
+          // glTF node names are capitalized; app kind ids are lowercase.
+          const node = gltf.scene.getObjectByName(kind[0].toUpperCase() + kind.slice(1));
+          if (!node) throw new Error(`Panels.glb: missing mesh "${kind}"`);
+          const mesh = node as THREE.Mesh;
+          const geo = mesh.geometry.clone();
+          geo.rotateX(Math.PI / 2); // model thickness along Y -> app-canonical Z
+          geo.computeBoundingBox();
+          const bb = geo.boundingBox!;
+          const size = new THREE.Vector3();
+          const center = new THREE.Vector3();
+          bb.getSize(size);
+          bb.getCenter(center);
+          const scale = STEP / Math.max(size.x, size.z);
+          geo.translate(-center.x, -center.y, -center.z);
+          geo.scale(scale, scale, scale);
+          const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+          out[kind] = { geometry: geo, material: mat };
+        }
+        panelAssets = out;
+        resolve();
+      } catch (err) {
+        fail(err);
+      }
+    },
+    undefined,
+    fail,
+  );
+  return promise;
 }
 
 const THICK = 0.5;
@@ -50,36 +103,20 @@ function hitMaterial(): THREE.MeshBasicMaterial {
 // Panel content in local coords: x/y span [-6, 6], thickness along local z.
 function buildPanelContent(type: PanelType, ghost: boolean): THREE.Group {
   const g = new THREE.Group();
-  const slab = new THREE.BoxGeometry(STEP, STEP, THICK);
   if (ghost) {
-    g.add(new THREE.Mesh(slab, ghostMaterial()));
-  } else if (type.kind === 'plain') {
-    g.add(new THREE.Mesh(slab, new THREE.MeshStandardMaterial({ color: type.color, roughness: 0.55, metalness: 0.05 })));
+    g.add(new THREE.Mesh(new THREE.BoxGeometry(STEP, STEP, THICK), ghostMaterial()));
   } else {
-    const wire = new THREE.MeshStandardMaterial({ color: type.color, roughness: 0.4, metalness: 0.5 });
-    const frame = new THREE.Group();
-    const h = new THREE.BoxGeometry(STEP, 0.7, 0.7);
-    const top = new THREE.Mesh(h, wire);
-    top.position.y = 5.65;
-    const bottom = new THREE.Mesh(h, wire);
-    bottom.position.y = -5.65;
-    const v = new THREE.BoxGeometry(0.7, 10.6, 0.7);
-    const left = new THREE.Mesh(v, wire);
-    left.position.x = 5.65;
-    const right = new THREE.Mesh(v, wire);
-    right.position.x = -5.65;
-    frame.add(top, bottom, left, right);
-    g.add(frame);
-    if (type.kind === 'grid') {
-      const w = new THREE.BoxGeometry(0.18, 10.6, 0.18);
-      const wh = new THREE.BoxGeometry(10.6, 0.18, 0.18);
-      for (const p of [-3, 0, 3]) {
-        const wireV = new THREE.Mesh(w, wire);
-        wireV.position.x = p;
-        const wireH = new THREE.Mesh(wh, wire);
-        wireH.position.y = p;
-        g.add(wireV, wireH);
-      }
+    const asset = panelAssets?.[type.kind];
+    if (asset) {
+      const mat = (asset.material as THREE.MeshStandardMaterial).clone();
+      if (type.kind === 'plain') mat.color.set(type.color); // custom colors override the Blender base
+      g.add(new THREE.Mesh(asset.geometry.clone(), mat));
+    } else {
+      // Fallback while the model loads (or if it failed): procedural boxes.
+      g.add(new THREE.Mesh(
+        new THREE.BoxGeometry(STEP, STEP, THICK),
+        new THREE.MeshStandardMaterial({ color: type.color, roughness: 0.55, metalness: 0.05 }),
+      ));
     }
   }
   // Uniform clickbox for every panel kind, matching the solid panel footprint.
