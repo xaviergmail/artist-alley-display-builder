@@ -426,10 +426,19 @@ test('normal mode places a table panel in one click', async ({ page }) => {
   await clickProjected(page, 'b.sceneCtx.tableTop');
   const state = await page.evaluate(() => {
     const b = (window as any).__builder;
-    return { panels: [...b.world.panels.values()], connectors: [...b.world.connectors.values()], markers: b.sceneCtx.markerGroup.children.length };
+    const panel = [...b.world.panels.values()][0];
+    return {
+      selectedKey: b.world.selectedKey,
+      selectedKeyMatchesPanel: b.world.selectedKey === `${panel.plane}:${panel.i},${panel.j},${panel.k}`,
+      panels: [...b.world.panels.values()],
+      connectors: [...b.world.connectors.values()],
+      markers: b.sceneCtx.markerGroup.children.length,
+    };
   });
   expect(state.panels).toHaveLength(1);
-  expect(state.markers).toBe(0);
+  expect(state.panels[0].plane).toBe('y');
+  expect(state.selectedKeyMatchesPanel).toBe(true);
+  expect(state.markers).toBe(8);
   expect(state.connectors).toEqual(expect.arrayContaining([expect.objectContaining({ plane: 'y', sign: 1, turn: 2 })]));
 });
 

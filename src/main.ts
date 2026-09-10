@@ -8,7 +8,6 @@ import {
   panelKey,
   sharedPanelEdge,
   type AssemblyState,
-  type Corner,
   type Placement,
 } from './model';
 import { SceneCtx, loadPanelAssets, connectorAnchors } from './scene';
@@ -125,8 +124,6 @@ let touchGesture = false;
 const activePointers = new Map<number, { x: number; y: number; moved: boolean; type: string }>();
 interface NormalCandidate {
   placement: Placement;
-  // Shared edge with the selected panel; previews press toward its midpoint.
-  edge: [Corner, Corner];
 }
 
 const normalCandidates = new Map<string, NormalCandidate>();
@@ -258,10 +255,9 @@ function candidatesForPanel(panel: Placement): NormalCandidate[] {
   // Normal mode mirrors quick build: only squares sharing a real edge with the
   // selected panel (coplanar continuation or perpendicular along that edge).
   // Corner-only diagonals stay placeable elsewhere but are never previewed.
-  return world.candidates().flatMap((candidate) => {
-    const anchor = sharedPanelEdge(candidate, panel);
-    return anchor ? [{ placement: candidate, edge: anchor }] : [];
-  });
+  return world.candidates().flatMap((candidate) =>
+    sharedPanelEdge(candidate, panel) ? [{ placement: candidate }] : [],
+  );
 }
 
 // Recompute the ghost for the remembered edge: pick the candidate square
@@ -580,7 +576,6 @@ function handleNormalTap(clientX: number, clientY: number): void {
   if (picked.tablePoint) {
     const candidateOnTable = tableCandidate(picked.tablePoint);
     if (candidateOnTable) {
-      world.selectedKey = null;
       placePanelAt(candidateOnTable);
       return;
     }

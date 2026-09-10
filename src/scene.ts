@@ -9,7 +9,6 @@ import {
   parsePointKey,
   panelKey,
   type Connector,
-  type Corner,
   type PanelType,
   type Placement,
   type World,
@@ -568,22 +567,13 @@ export class SceneCtx {
     this.hoverOutline.visible = true;
   }
 
-  setCandidateGhosts(candidates: Array<{ placement: Placement; type: PanelType; edge?: [Corner, Corner] }>): void {
+  setCandidateGhosts(candidates: Array<{ placement: Placement; type: PanelType }>): void {
     clearGroup(this.markerGroup);
     for (const candidate of candidates) {
       const obj = buildPanelContent(candidate.type, true);
+      // Ghosts sit centered in the square they would occupy.
       placePanel(obj, candidate.placement);
       obj.scale.setScalar(0.5);
-      if (candidate.edge) {
-        const edge = candidate.edge;
-        const center = panelCenter(candidate.placement);
-        const edgeMidpoint = [0, 1, 2].map((axis) => (edge[0][axis] + edge[1][axis]) * STEP / 2) as [number, number, number];
-        obj.position.set(
-          (center[0] + edgeMidpoint[0]) / 2,
-          (center[1] + edgeMidpoint[1]) / 2,
-          (center[2] + edgeMidpoint[2]) / 2,
-        );
-      }
       obj.userData.candidateKey = panelKey(candidate.placement);
       this.markerGroup.add(obj);
     }
