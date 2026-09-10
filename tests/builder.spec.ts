@@ -491,6 +491,19 @@ test('named designs restore only after explicit load confirmation', async ({ pag
   await page.getByRole('button', { name: 'Continue' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(1);
 });
+test('selecting an existing save immediately requires irreversible overwrite confirmation', async ({ page }) => {
+  await page.getByRole('button', { name: 'Save design' }).click();
+  await page.locator('.design-name-field input').fill('Overwrite');
+  await page.getByRole('button', { name: 'Save design' }).last().click();
+  await page.getByRole('button', { name: 'Save design' }).click();
+  await page.getByRole('button', { name: 'Overwrite' }).click();
+  const confirmation = page.locator('.confirmation-dialog');
+  await expect(confirmation).toBeVisible();
+  await expect(confirmation).toContainText('cannot be undone');
+  await expect(page.locator('.design-dialog')).not.toBeVisible();
+  await confirmation.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.locator('.action-status')).toHaveText('Saved “Overwrite”');
+});
 
 test('global material controls and share button serialize global finishes', async ({ page }) => {
   await page.locator('.material-color-btn').first().click();

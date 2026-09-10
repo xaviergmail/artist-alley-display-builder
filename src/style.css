@@ -143,8 +143,7 @@ html, body, #app {
 }
 
 .dump-state-btn {
-  width: 40px;
-  height: 40px;
+  width: 64px;
   border: 1px solid #c3c9d1;
   border-radius: 8px;
   background: #fff;
@@ -613,6 +612,11 @@ html, body, #app {
   display: grid;
   grid-template-columns: repeat(2, 30px);
   gap: 4px;
+}
+
+.github-action {
+  grid-column: 1 / -1;
+  width: 64px;
 }
 
 .sidebar-action {

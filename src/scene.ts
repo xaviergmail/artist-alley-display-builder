@@ -28,20 +28,64 @@ interface PanelAsset {
   geometry: THREE.BufferGeometry;
   materials: THREE.Material[];
 }
+
+export interface ModelMaterialDefaults {
+  panel: string;
+  metal: string;
+  connector: string;
+}
+
+interface ModelMaterials {
+  panel: THREE.MeshStandardMaterial;
+  metal: THREE.MeshStandardMaterial;
+  connector: THREE.MeshStandardMaterial;
+}
+
+const SHARED_MATERIAL = 'artistAlleySharedMaterial';
+let modelMaterials: ModelMaterials | null = null;
+const customPanelMaterials = new Map<string, THREE.MeshStandardMaterial>();
 let panelAssets: Record<'grid' | 'outline' | 'plain', PanelAsset> | null = null;
-// The Connector mesh from the GLB, canonical orientation: plate in XY,
-// cross-side structure protruding toward -z, tangential (B*) side toward +z.
 let connectorAsset: PanelAsset | null = null;
-// Anchor profile extracted from the GLB armatures (see loadPanelAssets).
+
 export interface ConnectorAnchors {
   cross: string[];
   bottom: string[];
 }
+
 export let connectorAnchors: ConnectorAnchors | null = null;
-// Resolves with each kind's primary material hex color (for sidebar swatches),
-// or null if the model could not be loaded.
-export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', string> | null> {
-  const { promise, resolve } = Promise.withResolvers<Record<'grid' | 'outline' | 'plain', string> | null>();
+
+function standardMaterial(material: THREE.Material, name: string): THREE.MeshStandardMaterial {
+  if (!(material instanceof THREE.MeshStandardMaterial)) throw new Error(`Panels.glb: "${name}" is not a standard material`);
+  return material;
+}
+
+function sharedClone(material: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial {
+  const clone = material.clone();
+  clone.userData[SHARED_MATERIAL] = true;
+  return clone;
+}
+
+function namedMaterial(materials: THREE.Material[], names: readonly string[]): THREE.MeshStandardMaterial {
+  const material = materials.find((candidate) => names.includes(candidate.name));
+  if (!material) throw new Error(`Panels.glb: missing material "${names.join('" or "')}"`);
+  return standardMaterial(material, names[0]);
+}
+
+function surfaceMaterial(type: PanelType): THREE.MeshStandardMaterial | null {
+  if (!modelMaterials) return null;
+  if (!type.custom) return modelMaterials.panel;
+  let material = customPanelMaterials.get(type.id);
+  if (!material) {
+    material = sharedClone(modelMaterials.panel);
+    customPanelMaterials.set(type.id, material);
+  }
+  material.color.set(type.color);
+  return material;
+}
+
+// Resolves the default named GLB material colors used to seed assembly state.
+export function loadPanelAssets(): Promise<ModelMaterialDefaults | null> {
+  const { promise, resolve } = Promise.withResolvers<ModelMaterialDefaults | null>();
   const fail = (err: unknown) => {
     console.error('failed to load Panels.glb, falling back to procedural panels', String(err));
     resolve(null);
@@ -51,7 +95,7 @@ export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', 
     (gltf) => {
       try {
         const out = {} as Record<'grid' | 'outline' | 'plain', PanelAsset>;
-        const colors = {} as Record<'grid' | 'outline' | 'plain', string>;
+        const panelSources: THREE.Material[] = [];
         for (const kind of ['grid', 'outline', 'plain'] as const) {
           // glTF node names are capitalized; app kind ids are lowercase.
           const node = gltf.scene.getObjectByName(kind[0].toUpperCase() + kind.slice(1));
@@ -90,8 +134,7 @@ export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', 
           geo.translate(-center.x, -center.y, -center.z);
           geo.scale(scale, scale, scale);
           out[kind] = { geometry: geo, materials: mats };
-          const surface = mats.find((material) => material.name === 'Panel') as THREE.MeshStandardMaterial | undefined;
-          colors[kind] = '#' + (surface ?? mats[0] as THREE.MeshStandardMaterial).color.getHexString();
+          panelSources.push(...mats);
         }
         // Connector hub mesh (no children, origin = the connection point:
         // the bbox is asymmetric toward the cross-side protrusion, so
@@ -100,14 +143,26 @@ export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', 
         // the cross side protrudes toward -Z. Convert it into the app's Y-up
         // canonical frame (plate XZ, cross +Y) before applying ORIENT_QUATS.
         const connNode = gltf.scene.getObjectByName('Connector') as THREE.Mesh | undefined;
-        if (connNode) {
-          connNode.updateMatrixWorld(true);
-          const cgeo = connNode.geometry.clone();
-          cgeo.rotateX(Math.PI / 2);
-          const cmat = Array.isArray(connNode.material) ? connNode.material[0] : connNode.material;
-          const cscale = STEP / 30;
-          connectorAsset = { geometry: cgeo.scale(cscale, cscale, cscale), materials: [cmat] };
-        }
+        if (!connNode) throw new Error('Panels.glb: missing Connector mesh');
+        connNode.updateMatrixWorld(true);
+        const cgeo = connNode.geometry.clone();
+        cgeo.rotateX(Math.PI / 2);
+        const cmat = Array.isArray(connNode.material) ? connNode.material[0] : connNode.material;
+        const connectorSource = namedMaterial([cmat], ['Connector', 'Black Plastic Connector']);
+        const cscale = STEP / 30;
+        connectorAsset = { geometry: cgeo.scale(cscale, cscale, cscale), materials: [connectorSource] };
+
+        for (const material of [...panelSources, connectorSource]) material.userData[SHARED_MATERIAL] = true;
+        modelMaterials = {
+          panel: sharedClone(namedMaterial(panelSources, ['Panel'])),
+          metal: sharedClone(namedMaterial(panelSources, ['Metal', 'Black'])),
+          connector: sharedClone(connectorSource),
+        };
+        const defaults = {
+          panel: `#${modelMaterials.panel.color.getHexString()}`,
+          metal: `#${modelMaterials.metal.color.getHexString()}`,
+          connector: `#${modelMaterials.connector.color.getHexString()}`,
+        };
         panelAssets = out;
 
         // Armature slot data: the connector's 8 mount anchors (4 cross-side
@@ -126,7 +181,7 @@ export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', 
         } else {
           console.warn('Panels.glb armature does not match the 4+4 connector slot matrix; using geometric fallback', anchors, panelBones);
         }
-        resolve(colors);
+        resolve(defaults);
       } catch (err) {
         fail(err);
       }
@@ -163,8 +218,10 @@ function disposeObject(obj: THREE.Object3D): void {
   obj.traverse((o) => {
     if (o instanceof THREE.Mesh) {
       o.geometry.dispose();
-      if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose());
-      else o.material.dispose();
+      const materials = Array.isArray(o.material) ? o.material : [o.material];
+      for (const material of materials) {
+        if (!material.userData[SHARED_MATERIAL]) material.dispose();
+      }
     }
   });
 }
@@ -183,6 +240,12 @@ function hitMaterial(): THREE.MeshBasicMaterial {
   return new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
 }
 
+function panelMaterial(source: THREE.Material, type: PanelType): THREE.Material {
+  if (source.name === 'Panel') return surfaceMaterial(type) ?? source;
+  if (source.name === 'Metal' || source.name === 'Black') return modelMaterials?.metal ?? source;
+  return source;
+}
+
 // Panel content in its native GLB frame: x/z span [-6, 6], thickness along y.
 function buildPanelContent(type: PanelType, ghost: boolean, invalid = false, metalColor = '#2f3945'): THREE.Group {
   const g = new THREE.Group();
@@ -191,14 +254,9 @@ function buildPanelContent(type: PanelType, ghost: boolean, invalid = false, met
   } else {
     const asset = panelAssets?.[type.kind];
     if (asset) {
-      // Panel is the GLB's named surface. Every other material group is
-      // hardware and uses the assembly-wide metal finish.
-      const mats = asset.materials.map((m) => (m as THREE.MeshStandardMaterial).clone());
-      for (const material of mats) {
-        if (type.kind === 'plain' && material.name === 'Panel') material.color.set(type.color);
-        else material.color.set(metalColor);
-      }
-      const mesh = new THREE.Mesh(asset.geometry.clone(), mats);
+      // Named GLB materials are shared across the assembly. Only custom
+      // panel types need an isolated Panel clone to retain their own color.
+      const mesh = new THREE.Mesh(asset.geometry.clone(), asset.materials.map((material) => panelMaterial(material, type)));
       mesh.castShadow = false;
       g.add(mesh);
     } else {
@@ -244,11 +302,10 @@ function buildConnector(
 ): THREE.Group {
   const g = new THREE.Group();
   if (connectorAsset) {
-    const mat = ghost
+    const material = ghost
       ? new THREE.MeshBasicMaterial({ color: invalid ? GHOST_BAD : GHOST, transparent: true, opacity: 0.45, depthWrite: false })
-      : (connectorAsset.materials[0] as THREE.MeshStandardMaterial).clone();
-    if (!ghost) (mat as THREE.MeshStandardMaterial).color.set(connectorColor);
-    const mesh = new THREE.Mesh(connectorAsset.geometry.clone(), mat);
+      : modelMaterials?.connector ?? connectorAsset.materials[0];
+    const mesh = new THREE.Mesh(connectorAsset.geometry.clone(), material);
     mesh.quaternion.copy(ORIENT_QUATS[`${conn.plane}${conn.sign}`]);
     if (conn.turn) mesh.rotateY(conn.turn * Math.PI / 2);
     mesh.castShadow = false;
@@ -403,8 +460,26 @@ export class SceneCtx {
     add(new THREE.BoxGeometry(17, 18, 1.6), seatMat, 0, FLOOR_Y + 23, -7);
     this.tableGroup.add(chair);
   }
+  syncModelMaterials(world: World): void {
+    if (!modelMaterials) return;
+    const plain = world.types.get('plain');
+    if (plain) modelMaterials.panel.color.set(plain.color);
+    modelMaterials.metal.color.set(world.metalColor);
+    modelMaterials.connector.color.set(world.connectorColor);
+    for (const type of world.types.values()) {
+      if (type.custom) surfaceMaterial(type);
+    }
+    for (const [id, material] of customPanelMaterials) {
+      if (!world.types.has(id)) {
+        material.dispose();
+        customPanelMaterials.delete(id);
+      }
+    }
+  }
+
 
   rebuild(world: World, showSelection = true): void {
+    this.syncModelMaterials(world);
     clearGroup(this.panelGroup);
     clearGroup(this.connectorGroup);
     this.panelMeshes.clear();

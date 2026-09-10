@@ -368,12 +368,7 @@ export class UI {
       input.placeholder = `Design ${names.length + 1}`;
       input.autofocus = true;
       label.appendChild(input);
-      const save = document.createElement('button');
-      save.className = 'primary-dialog-action';
-      save.type = 'button';
-      save.textContent = 'Save design';
-      save.addEventListener('click', () => {
-        const name = input.value.trim() || input.placeholder;
+      const finishSave = (name: string) => {
         const saved = this.cbs.onSaveNamed(name);
         if (saved) {
           this.designDialog.close();
@@ -381,12 +376,34 @@ export class UI {
         } else {
           input.setAttribute('aria-invalid', 'true');
         }
-      });
+      };
+      const requestSave = (rawName: string) => {
+        const name = rawName.trim().replace(/\s+/g, ' ').slice(0, 60);
+        if (!name) {
+          input.setAttribute('aria-invalid', 'true');
+          return;
+        }
+        if (!names.includes(name)) {
+          finishSave(name);
+          return;
+        }
+        this.designDialog.close();
+        this.requestConfirmation(
+          `Overwrite “${name}”?`,
+          'This will permanently replace the saved design and cannot be undone.',
+          () => finishSave(name),
+        );
+      };
+      const save = document.createElement('button');
+      save.className = 'primary-dialog-action';
+      save.type = 'button';
+      save.textContent = 'Save design';
+      save.addEventListener('click', () => requestSave(input.value.trim() || input.placeholder));
       for (const name of names) {
         const item = document.createElement('button');
         item.type = 'button';
         item.textContent = name;
-        item.addEventListener('click', () => { input.value = name; input.focus(); });
+        item.addEventListener('click', () => requestSave(name));
         list.appendChild(item);
       }
       this.designDialog.replaceChildren(header, label, save, list);

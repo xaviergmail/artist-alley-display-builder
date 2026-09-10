@@ -576,11 +576,17 @@ const ui = new UI(sidebar, viewport, {
   },
   onSetTypeColor: (id, color) => {
     world.setTypeColor(id, color);
-    refresh();
+    sceneCtx.syncModelMaterials(world);
+    ui.updateTypes(world.types, world.activeTypeId);
+    syncUrl(world);
+    renderFrame();
   },
   onSetMaterialColor: (target, color) => {
     world.setMaterialColor(target, color);
-    refresh();
+    sceneCtx.syncModelMaterials(world);
+    ui.updateMaterials(world.metalColor, world.connectorColor);
+    syncUrl(world);
+    renderFrame();
   },
   onRemoveType: (id, replacementId) => {
     world.removeType(id, replacementId);
@@ -782,12 +788,15 @@ function debugInfo(): {
 
  (window as unknown as Record<string, unknown>).__builder = { world, sceneCtx, debug: { info: debugInfo, raycaster, ndc, setNdc, updateHover, get anchors() { return connectorAnchors; }, get gesture() { return { camDragging, touchGesture, activePointerCount: activePointers.size, normalCandidateCount: normalCandidates.size }; } } };
 
-loadPanelAssets().then((colors) => {
-  if (colors) {
-    defaultPlainColor = colors.plain;
-    if (!restoredFromUrl && world.panels.size === 0 && world.types.get('plain')?.color === '#000000') {
-      world.setTypeColor('plain', defaultPlainColor);
+loadPanelAssets().then((defaults) => {
+  if (defaults) {
+    defaultPlainColor = defaults.panel;
+    if (!restoredFromUrl && world.panels.size === 0) {
+      world.setTypeColor('plain', defaults.panel);
+      world.metalColor = defaults.metal;
+      world.connectorColor = defaults.connector;
     }
+    sceneCtx.syncModelMaterials(world);
   }
   refresh();
 });
