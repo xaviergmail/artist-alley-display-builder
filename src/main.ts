@@ -153,33 +153,14 @@ function edgeNeighbors(p: Placement, edge: number): Placement[] {
   return [{ plane: 'x', i, j, k: k + 1 }, { plane: 'z', i: i - 1, j, k: k + 1 }, { plane: 'z', i, j, k: k + 1 }];
 }
 
-function standingCandidates(point: THREE.Vector3): Placement[] {
-  const options: Placement[] = [
-    { plane: 'z', i: Math.round(point.x / STEP - 0.5), j: 0, k: Math.round(point.z / STEP) },
-    { plane: 'x', i: Math.round(point.x / STEP), j: 0, k: Math.round(point.z / STEP - 0.5) },
-  ];
-  return options.filter((p) => world.canPlace(p));
-}
-
-// Prefer the standing orientation whose face points most toward the camera.
-function chooseStanding(options: Placement[]): Placement | null {
-  let best: Placement | null = null;
-  let bestScore = -Infinity;
-  for (const p of options) {
-    const c = panelCenter(p);
-    const toCam = new THREE.Vector3(
-      sceneCtx.camera.position.x - c[0],
-      sceneCtx.camera.position.y - c[1],
-      sceneCtx.camera.position.z - c[2]
-    ).normalize();
-    const n = p.plane === 'z' ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0);
-    const score = Math.abs(n.dot(toCam));
-    if (score > bestScore) {
-      bestScore = score;
-      best = p;
-    }
-  }
-  return best;
+function tableCandidate(point: THREE.Vector3): Placement | null {
+  const candidate: Placement = {
+    plane: 'y',
+    i: Math.round(point.x / STEP - 0.5),
+    j: 0,
+    k: Math.round(point.z / STEP - 0.5),
+  };
+  return world.canPlace(candidate) ? candidate : null;
 }
 
 function clearHover(): void {
@@ -284,7 +265,7 @@ function updateHover(clientX: number, clientY: number): void {
   }
   updateEdgeGhost(mx, my);
   if (!ghostPlacement && !edgeHover && picked.tablePoint) {
-    const s = chooseStanding(standingCandidates(picked.tablePoint));
+    const s = tableCandidate(picked.tablePoint);
     if (s) {
       ghostPlacement = s;
       ghostInvalid = false;

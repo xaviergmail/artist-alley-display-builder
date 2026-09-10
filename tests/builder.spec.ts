@@ -19,7 +19,10 @@ interface Builder {
     panelGroup: { children: unknown[] };
   };
   debug: {
-    info(): { hover: unknown; hoverPanelKey: string | null };
+    info(): {
+      hoverPanelKey: string | null;
+      ghostPlacement: { plane: string; i: number; j: number; k: number } | null;
+    };
   };
 }
 
@@ -72,31 +75,39 @@ test('bug export button copies a complete assembly JSON snapshot', async ({ page
   expect(copied.connectors).toEqual([]);
 });
 
-test('hovering the table shows a standing-panel ghost with connectors', async ({ page }) => {
+test('hovering the table shows a flat-panel ghost with four face-up connectors', async ({ page }) => {
   const box = await canvasBox(page);
   await page.mouse.move(box.x + box.width * 0.42, box.y + box.height * 0.55, { steps: 3 });
   await expect
     .poll(() =>
       page.evaluate(() => (window as unknown as { __builder: Builder }).__builder.sceneCtx.ghostGroup.children.length)
     )
-    .toBeGreaterThan(0);
+    .toBe(5);
+  const ghost = await page.evaluate(() => (window as unknown as { __builder: Builder }).__builder.debug.info());
+  expect(ghost.ghostPlacement).toMatchObject({ plane: 'y', j: 0 });
 });
 
-test('clicking the table places the active panel and updates candidates', async ({ page }) => {
+test('clicking the table places a flat active panel with four face-up connectors', async ({ page }) => {
   const box = await canvasBox(page);
   await page.mouse.move(box.x + box.width * 0.42, box.y + box.height * 0.55, { steps: 3 });
   await page.mouse.down({ button: 'left' });
   await page.mouse.up({ button: 'left' });
   await page.waitForTimeout(150);
 
-  const panels = await page.evaluate(() => [...(window as unknown as { __builder: Builder }).__builder.world.panels.values()]);
-  expect(panels).toHaveLength(1);
-  expect(panels[0].plane).toBe('z');
-  expect(panels[0].j).toBe(0);
+  const state = await page.evaluate(() => {
+    const b = (window as unknown as { __builder: Builder }).__builder;
+    return { panels: [...b.world.panels.values()], connectors: [...b.world.connectors.values()] };
+  });
+  expect(state.panels).toHaveLength(1);
+  expect(state.panels[0]).toMatchObject({ plane: 'y', j: 0 });
+  expect(state.connectors).toHaveLength(4);
+  expect(state.connectors).toEqual(
+    expect.arrayContaining(Array.from({ length: 4 }, () => expect.objectContaining({ plane: 'y', sign: 1 })))
+  );
   expect((await builder(page)).world.candidates().length).toBeGreaterThan(0);
 });
 
-test('edge-adjacent placement shares corner connectors between panels', async ({ page }) => {
+test('flat table panel exposes a coplanar continuation candidate', async ({ page }) => {
   const box = await canvasBox(page);
   await page.mouse.move(box.x + box.width * 0.42, box.y + box.height * 0.55, { steps: 3 });
   await page.mouse.down({ button: 'left' });
@@ -105,14 +116,13 @@ test('edge-adjacent placement shares corner connectors between panels', async ({
 
   const target = await page.evaluate(() => {
     const b = (window as unknown as { __builder: Builder }).__builder;
-    return b.world.candidates().find((c) => c.plane === 'z' && c.i === 2 && c.j === 0 && c.k === 0) ?? null;
+    const panel = [...b.world.panels.values()][0];
+    return b.world.candidates().find(
+      (candidate) => candidate.plane === 'y' && candidate.i === panel.i + 1
+        && candidate.j === panel.j && candidate.k === panel.k
+    ) ?? null;
   });
   expect(target).not.toBeNull();
-
-  const connectors = await page.evaluate(() => [...(window as unknown as { __builder: Builder }).__builder.world.connectors.keys()]);
-  // shared corners (2,0,0) and (2,1,0) each host one connector
-  expect(connectors).toContain('2,0,0');
-  expect(connectors).toContain('2,1,0');
 });
 
 test('left click selects a placed panel and shows the center trash', async ({ page }) => {

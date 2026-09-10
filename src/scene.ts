@@ -77,7 +77,7 @@ export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', 
               ?? geos[0];
             console.warn(`Panels.glb: degraded merge for "${kind}"`);
           }
-          geo.rotateX(Math.PI / 2); // model thickness along Y -> app-canonical Z
+          // GLB native frame: panel lies flat in XZ, thickness along +Y.
           geo.computeBoundingBox();
           const bb = geo.boundingBox!;
           const size = new THREE.Vector3();
@@ -93,17 +93,12 @@ export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', 
         // Connector hub mesh (no children, origin = the connection point:
         // the bbox is asymmetric toward the cross-side protrusion, so
         // DO NOT recenter - the origin must stay on the lattice corner).
-        // Canonicalize like the panels: bake the node frame, then the same
-        // rotateX(PI/2). Raw asset frame: plate in XY, cross side protrudes
-        // toward -Z (per the Connector_Connections anchor frames), which the
-        // rotation turns into the app-canonical cross axis +Y.
+        // The GLB is already face-up in the app frame: plate in XZ and
+        // cross-side structure toward +Y. Keep that native orientation.
         const connNode = gltf.scene.getObjectByName('Connector') as THREE.Mesh | undefined;
         if (connNode) {
           connNode.updateMatrixWorld(true);
-          // No children and no node TRS: the geometry is already in its
-          // node-local (asset) frame - do not bake matrixWorld.
           const cgeo = connNode.geometry.clone();
-          cgeo.rotateX(Math.PI / 2);
           const cmat = Array.isArray(connNode.material) ? connNode.material[0] : connNode.material;
           const cscale = STEP / 30;
           connectorAsset = { geometry: cgeo.scale(cscale, cscale, cscale), materials: [cmat] };
@@ -167,11 +162,11 @@ function hitMaterial(): THREE.MeshBasicMaterial {
   return new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
 }
 
-// Panel content in local coords: x/y span [-6, 6], thickness along local z.
+// Panel content in its native GLB frame: x/z span [-6, 6], thickness along y.
 function buildPanelContent(type: PanelType, ghost: boolean, invalid = false): THREE.Group {
   const g = new THREE.Group();
   if (ghost) {
-    g.add(new THREE.Mesh(new THREE.BoxGeometry(STEP, STEP, THICK), ghostMaterial(invalid)));
+    g.add(new THREE.Mesh(new THREE.BoxGeometry(STEP, THICK, STEP), ghostMaterial(invalid)));
   } else {
     const asset = panelAssets?.[type.kind];
     if (asset) {
@@ -183,13 +178,13 @@ function buildPanelContent(type: PanelType, ghost: boolean, invalid = false): TH
     } else {
       // Fallback while the model loads (or if it failed): procedural boxes.
       g.add(new THREE.Mesh(
-        new THREE.BoxGeometry(STEP, STEP, THICK),
+        new THREE.BoxGeometry(STEP, THICK, STEP),
         new THREE.MeshStandardMaterial({ color: type.color, roughness: 0.55, metalness: 0.05 }),
       ));
     }
   }
   // Uniform clickbox for every panel kind, matching the solid panel footprint.
-  const hit = new THREE.Mesh(new THREE.BoxGeometry(STEP + 0.4, STEP + 0.4, THICK + 0.9), hitMaterial());
+  const hit = new THREE.Mesh(new THREE.BoxGeometry(STEP + 0.4, THICK + 0.9, STEP + 0.4), hitMaterial());
   g.add(hit);
   return g;
 }
@@ -197,13 +192,12 @@ function buildPanelContent(type: PanelType, ghost: boolean, invalid = false): TH
 function placePanel(obj: THREE.Group, p: Placement): void {
   const c = panelCenter(p);
   obj.position.set(c[0], c[1], c[2]);
-  if (p.plane === 'x') obj.rotation.y = Math.PI / 2;
-  if (p.plane === 'y') obj.rotation.x = -Math.PI / 2;
+  if (p.plane === 'x') obj.rotation.z = -Math.PI / 2;
+  if (p.plane === 'z') obj.rotation.x = Math.PI / 2;
 }
 
-// The GLB connector, canonical orientation (after the shared rotateX(PI/2)):
-// plate in XZ, tangential (B*) side toward -Y, cross-side structure toward
-// +Y. Placed orientation rotates the canonical cross axis (0,1,0) onto the
+// The native GLB connector is face-up: plate in XZ and cross-side structure
+// toward +Y. Placed orientation rotates its cross axis (0,1,0) onto the
 // connector's cross-panel direction (plate normal * sign). All six targets
 // are 90-degree-multiple rotations, so the slot pattern stays lattice-aligned.
 const ORIENT_QUATS: Record<string, THREE.Quaternion> = {
@@ -288,7 +282,7 @@ export class SceneCtx {
     this.scene.add(ground, this.tableGroup, this.panelGroup, this.connectorGroup, this.ghostGroup);
 
     this.selectionHelper = new THREE.Mesh(
-      new THREE.BoxGeometry(STEP + 1, STEP + 1, THICK + 2),
+      new THREE.BoxGeometry(STEP + 1, THICK + 2, STEP + 1),
       new THREE.MeshBasicMaterial({ color: GHOST, transparent: true, opacity: 0.28, depthWrite: false })
     );
     this.selectionHelper.visible = false;
