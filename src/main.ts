@@ -230,9 +230,10 @@ function clearNormalCandidates(): void {
   sceneCtx.setHoveredMarker(null);
 }
 
-function updateMarkerHover(): void {
+function updateMarkerHover(clientX: number, clientY: number): void {
   // Normal mode: outline the candidate ghost under the cursor. Marker meshes
   // are children of markerGroup, so walk up to the marker itself.
+  setNdc(clientX, clientY);
   raycaster.setFromCamera(ndc, sceneCtx.camera);
   const hit = firstHit([sceneCtx.markerGroup]);
   let marker: THREE.Object3D | null = null;
@@ -667,10 +668,12 @@ canvas.addEventListener('pointerdown', (e) => {
     camDragging = true;
     clearHover();
     canvas.style.cursor = 'move';
+    renderFrame();
   } else if (e.button === 1) {
     camDragging = true;
     clearHover();
     canvas.style.cursor = 'move';
+    renderFrame();
   }
 });
 
@@ -687,7 +690,7 @@ canvas.addEventListener('pointermove', (e) => {
   }
   if (e.pointerType !== 'mouse' || camDragging) return;
   if (buildMode === 'quick') updateHover(e.clientX, e.clientY);
-  else updateMarkerHover();
+  else updateMarkerHover(e.clientX, e.clientY);
 });
 
 canvas.addEventListener('pointerup', (e) => {
@@ -729,6 +732,7 @@ function cancelPointer(e: PointerEvent): void {
   // companion pointer keeps the multi-touch tap guard alive.
   touchGesture = activePointers.size > 0;
   clearHover();
+  renderFrame();
 }
 canvas.addEventListener('pointercancel', cancelPointer);
 canvas.addEventListener('lostpointercapture', cancelPointer);
