@@ -370,6 +370,7 @@ export class SceneCtx {
   private tableLength = 72;
   private panelMeshes = new Map<string, THREE.Object3D>();
   private selectionHelper: THREE.Mesh;
+  private hoverOutline: THREE.LineSegments;
 
   constructor(container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -414,6 +415,14 @@ export class SceneCtx {
       new THREE.MeshBasicMaterial({ color: GHOST, transparent: true, opacity: 0.28, depthWrite: false })
     );
     this.selectionHelper.visible = false;
+    // Normal-mode hover outline: hugs the candidate ghost marker under the
+    // cursor. Scaled with the marker so the half-size previews get a snug box.
+    this.hoverOutline = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(STEP, THICK, STEP)),
+      new THREE.LineBasicMaterial({ color: GHOST }),
+    );
+    this.hoverOutline.visible = false;
+    this.scene.add(this.hoverOutline);
     this.scene.add(this.selectionHelper);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -428,9 +437,11 @@ export class SceneCtx {
     return this.panelMeshes.get(key);
   }
 
-  setPlacementMode(mode: 'normal' | 'quick'): void {
+  setPlacementMode(_mode: 'normal' | 'quick'): void {
+    // Left-drag orbits in both modes; quick mode places on stationary
+    // left-clicks (drag-vs-click is disambiguated by movement threshold).
     this.controls.mouseButtons = {
-      LEFT: mode === 'normal' ? THREE.MOUSE.ROTATE : null,
+      LEFT: THREE.MOUSE.ROTATE,
       MIDDLE: THREE.MOUSE.PAN,
       RIGHT: THREE.MOUSE.ROTATE,
     } as unknown as typeof this.controls.mouseButtons;
@@ -545,6 +556,17 @@ export class SceneCtx {
     for (const [key, conn] of ghost.connectors) {
       this.ghostGroup.add(buildConnector(conn, parsePointKey(key), true, ghost.invalid === true));
     }
+  }
+
+  setHoveredMarker(marker: THREE.Object3D | null): void {
+    if (!marker) {
+      this.hoverOutline.visible = false;
+      return;
+    }
+    this.hoverOutline.position.copy(marker.position);
+    this.hoverOutline.quaternion.copy(marker.quaternion);
+    this.hoverOutline.scale.copy(marker.scale);
+    this.hoverOutline.visible = true;
   }
 
   setCandidateGhosts(candidates: Array<{ placement: Placement; type: PanelType; anchor?: Placement }>): void {

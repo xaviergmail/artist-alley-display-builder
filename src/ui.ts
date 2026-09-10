@@ -452,7 +452,7 @@ export class UI {
     header.append(title, close);
     const steps = [
       ['Navigate', 'Drag with one finger or the left mouse button to orbit. Two fingers pan or pinch to zoom; the mouse wheel also zooms.'],
-      ['Place panels', 'Normal mode: tap the table once to place a panel, or tap a panel then tap one of the blue possible-panel previews. Impossible placements are never shown.'],
+      ['Place panels', 'Normal mode: tap the table once to place a panel, or tap a panel then tap one of the blue possible-panel previews (the preview under your cursor is outlined). Impossible placements are never shown.'],
       ['Quick build', 'Turn on Quick build in the sidebar for the original hover-a-preview, click-to-place workflow.'],
       ['Connectors', 'Connectors are placed and aligned automatically. Free table-edge connectors face inward toward the chair.'],
       ['Panel types', 'Choose a panel type at left, or add any colored plain panel. The Metal and Connector controls set global finishes.'],

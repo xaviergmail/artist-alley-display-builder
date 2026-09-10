@@ -221,11 +221,27 @@ function clearHover(): void {
   ghostPlacement = null;
   ghostInvalid = false;
   sceneCtx.setGhost(null);
+  sceneCtx.setHoveredMarker(null);
 }
 
 function clearNormalCandidates(): void {
   normalCandidates.clear();
   sceneCtx.setCandidateGhosts([]);
+  sceneCtx.setHoveredMarker(null);
+}
+
+function updateMarkerHover(): void {
+  // Normal mode: outline the candidate ghost under the cursor. Marker meshes
+  // are children of markerGroup, so walk up to the marker itself.
+  raycaster.setFromCamera(ndc, sceneCtx.camera);
+  const hit = firstHit([sceneCtx.markerGroup]);
+  let marker: THREE.Object3D | null = null;
+  if (hit) {
+    marker = hit.object;
+    while (marker && marker.parent !== sceneCtx.markerGroup) marker = marker.parent;
+  }
+  sceneCtx.setHoveredMarker(marker);
+  renderFrame();
 }
 
 function showNormalCandidates(candidates: NormalCandidate[]): void {
@@ -669,7 +685,9 @@ canvas.addEventListener('pointermove', (e) => {
     }
     if (pointer.moved) return;
   }
-  if (buildMode === 'quick' && e.pointerType === 'mouse' && !camDragging) updateHover(e.clientX, e.clientY);
+  if (e.pointerType !== 'mouse' || camDragging) return;
+  if (buildMode === 'quick') updateHover(e.clientX, e.clientY);
+  else updateMarkerHover();
 });
 
 canvas.addEventListener('pointerup', (e) => {
