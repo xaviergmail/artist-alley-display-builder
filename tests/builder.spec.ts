@@ -442,6 +442,18 @@ test('normal mode places a table panel in one click', async ({ page }) => {
   expect(state.connectors).toEqual(expect.arrayContaining([expect.objectContaining({ plane: 'y', sign: 1, turn: 2 })]));
 });
 
+test('switching build modes deselects the active panel', async ({ page }) => {
+  await page.locator('.quick-mode-btn').click();
+  await clickProjected(page, 'b.sceneCtx.tableTop');
+  await expect.poll(() => page.evaluate(() => (window as any).__builder.world.selectedKey)).not.toBeNull();
+
+  await page.locator('.quick-mode-btn').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__builder.world.selectedKey)).toBeNull();
+
+  await page.locator('.quick-mode-btn').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__builder.world.selectedKey)).toBeNull();
+});
+
 test('normal mode previews only edge-connected placements, never corner diagonals', async ({ page }) => {
   await page.locator('.quick-mode-btn').click();
   await clickProjected(page, 'b.sceneCtx.tableTop');

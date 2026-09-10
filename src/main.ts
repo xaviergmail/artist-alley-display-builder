@@ -636,6 +636,7 @@ const ui = new UI(sidebar, viewport, {
     buildMode = enabled ? 'quick' : 'normal';
     localStorage.setItem(QUICK_MODE_KEY, String(enabled));
     sceneCtx.setPlacementMode(buildMode);
+    world.selectedKey = null;
     clearHover();
     clearNormalCandidates();
     renderFrame();
