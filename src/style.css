@@ -724,3 +724,136 @@ html, body, #app {
 .tutorial-dialog strong {
   color: #1e293b;
 }
+
+#mobile-landscape-gate {
+  display: none;
+}
+
+@media (max-width: 767px), (max-height: 480px) and (orientation: landscape) {
+  #sidebar {
+    width: 72px;
+    flex-basis: 72px;
+    gap: 6px;
+    padding: 6px 0;
+  }
+
+  .type-list {
+    gap: 6px;
+  }
+
+  .type-entry,
+  .type-btn {
+    width: 48px;
+    height: 48px;
+  }
+
+  .type-btn .icon {
+    inset: 6px;
+  }
+  .add-btn,
+  .quick-mode-btn,
+  .material-controls,
+  .material-color-btn,
+  .github-action,
+  .sidebar-footer,
+  .dump-state-btn {
+    width: 48px;
+  }
+
+  .add-btn {
+    height: 34px;
+    font-size: 9px;
+  }
+
+  .quick-mode-btn,
+  .material-color-btn {
+    min-height: 30px;
+    font-size: 9px;
+  }
+
+  .material-controls {
+    gap: 4px;
+  }
+
+  .sidebar-footer {
+    gap: 4px;
+  }
+
+  .assembly-actions {
+    grid-template-columns: repeat(2, 23px);
+    gap: 2px;
+  }
+
+  .sidebar-action {
+    width: 23px;
+    min-height: 25px;
+    font-size: 12px;
+  }
+
+  #table-selector {
+    top: 6px;
+    gap: 3px;
+  }
+
+  #table-selector button {
+    padding: 4px 7px;
+    font-size: 11px;
+  }
+
+  #count-bar {
+    bottom: 6px;
+    gap: 5px;
+    padding: 4px 7px;
+  }
+
+  .count-item {
+    gap: 3px;
+    font-size: 11px;
+  }
+
+  .count-item strong {
+    font-size: 11px;
+  }
+
+  .help-btn {
+    top: 7px;
+    right: 8px;
+    width: 34px;
+    height: 34px;
+    font-size: 19px;
+  }
+}
+
+@media (max-width: 767px) and (orientation: portrait) {
+  #app {
+    visibility: hidden;
+  }
+
+  #mobile-landscape-gate {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 32px;
+    background: #f4f5f7;
+    color: #1e293b;
+    text-align: center;
+    z-index: 100;
+  }
+
+  #mobile-landscape-gate div {
+    display: grid;
+    gap: 8px;
+    max-width: 260px;
+  }
+
+  #mobile-landscape-gate strong {
+    font-size: 20px;
+  }
+
+  #mobile-landscape-gate span {
+    color: #475569;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+}

@@ -227,11 +227,13 @@ function clearNormalCandidates(): void {
   sceneCtx.setHoveredMarker(null);
 }
 
-function updateMarkerHover(clientX: number, clientY: number): void {
-  // Normal mode: outline the candidate ghost under the cursor. Marker meshes
-  // are children of markerGroup, so walk up to the marker itself.
+function updateNormalHover(clientX: number, clientY: number): void {
   setNdc(clientX, clientY);
   raycaster.setFromCamera(ndc, sceneCtx.camera);
+  sceneCtx.scene.updateMatrixWorld(true);
+
+  // Candidate markers take precedence over a table ghost at the same screen
+  // point so their hover outline remains a precise placement affordance.
   const hit = firstHit([sceneCtx.markerGroup]);
   let marker: THREE.Object3D | null = null;
   if (hit) {
@@ -239,6 +241,27 @@ function updateMarkerHover(clientX: number, clientY: number): void {
     while (marker && marker.parent !== sceneCtx.markerGroup) marker = marker.parent;
   }
   sceneCtx.setHoveredMarker(marker);
+
+  ghostPlacement = null;
+  ghostInvalid = false;
+  sceneCtx.setGhost(null);
+  if (!marker) {
+    const picked = pick();
+    if (picked.tablePoint) {
+      const placement = tableCandidate(picked.tablePoint);
+      const type = world.types.get(world.activeTypeId);
+      if (placement && type) {
+        ghostPlacement = placement;
+        sceneCtx.setGhost({
+          placement,
+          type,
+          connectors: world.orientationsFor(placement),
+          invalid: false,
+        });
+      }
+    }
+  }
+  canvas.style.cursor = marker || ghostPlacement ? 'pointer' : 'default';
   renderFrame();
 }
 
@@ -693,7 +716,7 @@ canvas.addEventListener('pointermove', (e) => {
   }
   if (e.pointerType !== 'mouse' || camDragging) return;
   if (buildMode === 'quick') updateHover(e.clientX, e.clientY);
-  else updateMarkerHover(e.clientX, e.clientY);
+  else updateNormalHover(e.clientX, e.clientY);
 });
 
 canvas.addEventListener('pointerup', (e) => {

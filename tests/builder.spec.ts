@@ -420,6 +420,29 @@ async function clickProjected(page: Page, objectExpression: string): Promise<voi
   }, objectExpression);
   await page.mouse.click(point.x, point.y);
 }
+test('normal mode hovers a table-placement ghost', async ({ page }) => {
+  await page.locator('.quick-mode-btn').click();
+  const box = await canvasBox(page);
+  await page.mouse.move(box.x + box.width * 0.42, box.y + box.height * 0.55, { steps: 3 });
+
+  await expect.poll(() =>
+    page.evaluate(() => (window as unknown as { __builder: Builder }).__builder.sceneCtx.ghostGroup.children.length)
+  ).toBe(5);
+  const ghost = await page.evaluate(() => (window as unknown as { __builder: Builder }).__builder.debug.info());
+  expect(ghost.ghostPlacement).toMatchObject({ plane: 'y', j: 0 });
+});
+
+test('small portrait screens require landscape while landscape uses compact controls', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('#mobile-landscape-gate')).toBeVisible();
+  await expect(page.locator('#app')).toHaveCSS('visibility', 'hidden');
+
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect(page.locator('#mobile-landscape-gate')).toBeHidden();
+  await expect(page.locator('#app')).toHaveCSS('visibility', 'visible');
+  await expect(page.locator('#sidebar')).toHaveCSS('width', '72px');
+});
+
 test('normal mode places a table panel in one click', async ({ page }) => {
   await page.locator('.quick-mode-btn').click();
   await expect(page.locator('.quick-mode-btn')).toHaveText('Quick build: Off');
