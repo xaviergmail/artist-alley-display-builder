@@ -439,7 +439,52 @@ test('normal mode places a table panel in one click', async ({ page }) => {
   expect(state.panels[0].plane).toBe('y');
   expect(state.selectedKeyMatchesPanel).toBe(true);
   expect(state.markers).toBe(8);
-  expect(state.connectors).toEqual(expect.arrayContaining([expect.objectContaining({ plane: 'y', sign: 1, turn: 2 })]));
+  expect(state.connectors).toEqual(expect.arrayContaining([expect.objectContaining({ plane: 'y', sign: 1 })]));
+});
+
+test('vertical panels receive connectors at every table-contacting corner', async ({ page }) => {
+  const connectors = await page.evaluate(() => {
+    const b = (window as any).__builder;
+    const state = b.world.toJSON();
+    state.panels = [
+      { plane: 'x', i: 3, j: 0, k: -1, id: 3, typeId: 'plain' },
+      { plane: 'x', i: 3, j: 0, k: 0, id: 6, typeId: 'plain' },
+    ];
+    state.connectors = [];
+    b.world.restore(state);
+    return [...b.world.connectors.entries()].map(([point, connector]: [string, any]) => ({ point, ...connector }));
+  });
+
+  expect(connectors.map((connector: { point: string }) => connector.point).sort()).toEqual([
+    '3,0,-1', '3,0,0', '3,0,1', '3,1,0',
+  ]);
+});
+
+test('vertical connector points face centre or use table-safe fallbacks after removal', async ({ page }) => {
+  const orientation = await page.evaluate(() => {
+    const b = (window as any).__builder;
+    const state = b.world.toJSON();
+    state.panels = [
+      { plane: 'x', i: 6, j: 0, k: 0, id: 28, typeId: 'plain' },
+      { plane: 'x', i: 6, j: 0, k: -1, id: 29, typeId: 'plain' },
+      { plane: 'x', i: 6, j: 1, k: 0, id: 30, typeId: 'plain' },
+      { plane: 'x', i: 6, j: 1, k: -1, id: 31, typeId: 'plain' },
+    ];
+    state.connectors = [];
+    b.world.restore(state);
+    const before = {
+      table: b.world.connectors.get('6,0,0'),
+      aboveTable: b.world.connectors.get('6,1,0'),
+    };
+    b.world.removePanel('x:6,0,0');
+    return { before, after: b.world.connectors.get('6,1,0') };
+  });
+
+  // x-plate hubs at z = 0 cannot rotate toward the centre: they point up on
+  // the table (turn 3) and down above it (turn 1), including after removal.
+  expect(orientation.before.table).toMatchObject({ plane: 'x', sign: 1, turn: 3 });
+  expect(orientation.before.aboveTable).toMatchObject({ plane: 'x', sign: 1, turn: 1 });
+  expect(orientation.after).toMatchObject({ plane: 'x', sign: 1, turn: 1 });
 });
 
 test('switching build modes deselects the active panel', async ({ page }) => {
