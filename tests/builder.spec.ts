@@ -314,7 +314,9 @@ test('share URL restores recolored panel state', async ({ page }) => {
   const box = await canvasBox(page);
   await page.mouse.click(box.x + box.width * 0.42, box.y + box.height * 0.55);
   const url = page.url();
-  expect(new URL(url).searchParams.has('assembly')).toBe(true);
+  const shared = new URL(url);
+  expect(shared.searchParams.has('assembly')).toBe(false);
+  expect(new URLSearchParams(shared.hash.slice(1)).has('assembly')).toBe(true);
 
   await page.goto(url);
   const state = await page.evaluate(() => (window as unknown as { __builder: Builder }).__builder.world.toJSON());
@@ -518,7 +520,8 @@ test('global material controls and share button serialize global finishes', asyn
   });
   await page.getByRole('button', { name: 'Share' }).click();
   const share = new URL(await page.locator('html').getAttribute('data-share-url')!);
-  const assembly = JSON.parse(share.searchParams.get('assembly')!);
+  expect(share.searchParams.has('assembly')).toBe(false);
+  const assembly = JSON.parse(new URLSearchParams(share.hash.slice(1)).get('assembly')!);
   expect(assembly).toMatchObject({ metalColor: '#3b82f6', connectorColor: '#ef4444' });
 });
 

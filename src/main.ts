@@ -27,7 +27,8 @@ const DESIGN_KEY_PREFIX = 'artist-alley-display-builder:design-v1:';
 const QUICK_MODE_KEY = 'artist-alley-display-builder:quick-mode';
 
 function restoreFromUrl(target: World): boolean {
-  const raw = new URL(window.location.href).searchParams.get(SHARE_PARAM);
+  const url = new URL(window.location.href);
+  const raw = new URLSearchParams(url.hash.slice(1)).get(SHARE_PARAM);
   if (!raw) return false;
   try {
     return target.restore(JSON.parse(raw) as AssemblyState);
@@ -38,7 +39,10 @@ function restoreFromUrl(target: World): boolean {
 
 function syncUrl(target: World): void {
   const url = new URL(window.location.href);
-  url.searchParams.set(SHARE_PARAM, JSON.stringify(target.toJSON()));
+  // Fragments are deliberately excluded from HTTP requests, avoiding
+  // oversized request headers for large shared assemblies.
+  url.searchParams.delete(SHARE_PARAM);
+  url.hash = new URLSearchParams([[SHARE_PARAM, JSON.stringify(target.toJSON())]]).toString();
   history.replaceState(null, '', url);
 }
 
