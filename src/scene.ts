@@ -425,6 +425,9 @@ export class SceneCtx {
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+    // Coarse-pointer devices need a slower orbit to map finger movement more
+    // closely to visible scene rotation. Mouse input restores the desktop rate.
+    this.controls.rotateSpeed = window.matchMedia('(pointer: coarse)').matches ? 0.5 : 1;
     this.controls.maxPolarAngle = Math.PI / 2;
     this.controls.minDistance = 20;
     this.controls.maxDistance = 800;

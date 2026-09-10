@@ -93,6 +93,8 @@ export class UI {
     this.addBtn = document.createElement('button');
     this.addBtn.className = 'add-btn';
     this.addBtn.innerHTML = `${ICON('plus')}<span>Add color</span>`;
+    this.addBtn.setAttribute('aria-label', 'Add colored panel');
+    this.addBtn.title = 'Add colored panel';
     this.addBtn.setAttribute('aria-haspopup', 'dialog');
     this.addBtn.addEventListener('click', () => this.openColorPicker({ kind: 'new' }, '#e74c3c', 'Add colored panel'));
     sidebar.appendChild(this.addBtn);
@@ -611,6 +613,8 @@ export class UI {
 
   setQuickMode(enabled: boolean, notify = true): void {
     this.quickBtn.setAttribute('aria-pressed', String(enabled));
+    this.quickBtn.setAttribute('aria-label', `Quick build: ${enabled ? 'On' : 'Off'}`);
+    this.quickBtn.title = `Quick build: ${enabled ? 'On' : 'Off'}`;
     this.quickBtn.innerHTML = `${ICON('bolt')}<span>Quick build: ${enabled ? 'On' : 'Off'}</span>`;
     this.quickBtn.classList.toggle('active', enabled);
     if (notify) this.cbs.onQuickModeChange(enabled);

@@ -436,11 +436,21 @@ test('small portrait screens require landscape while landscape uses compact cont
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator('#mobile-landscape-gate')).toBeVisible();
   await expect(page.locator('#app')).toHaveCSS('visibility', 'hidden');
-
   await page.setViewportSize({ width: 844, height: 390 });
   await expect(page.locator('#mobile-landscape-gate')).toBeHidden();
   await expect(page.locator('#app')).toHaveCSS('visibility', 'visible');
   await expect(page.locator('#sidebar')).toHaveCSS('width', '72px');
+  await expect(page.locator('.add-btn span')).toBeHidden();
+  await expect(page.locator('.quick-mode-btn span')).toBeHidden();
+
+  const touchSpeed = await page.evaluate(() => {
+    const b = (window as any).__builder;
+    const canvas = b.sceneCtx.renderer.domElement;
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'touch', clientX: 150, clientY: 150 }));
+    canvas.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, pointerType: 'touch', clientX: 150, clientY: 150 }));
+    return b.sceneCtx.controls.rotateSpeed;
+  });
+  expect(touchSpeed).toBe(0.5);
 });
 
 test('normal mode places a table panel in one click', async ({ page }) => {

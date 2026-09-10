@@ -685,6 +685,7 @@ window.addEventListener('popstate', () => {
 // ---------------------------------------------------------------- events
 
 canvas.addEventListener('pointerdown', (e) => {
+  sceneCtx.controls.rotateSpeed = e.pointerType === 'touch' ? 0.5 : 1;
   activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY, moved: false, type: e.pointerType });
   if (e.pointerType === 'touch' && [...activePointers.values()].filter((pointer) => pointer.type === 'touch').length > 1) touchGesture = true;
   if (e.button === 2) {

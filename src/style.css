@@ -771,6 +771,20 @@ html, body, #app {
     font-size: 9px;
   }
 
+  /* Icons remain identifiable through their labels/titles; hiding the long
+     captions prevents narrow phone sidebars from overflowing. */
+  .add-btn span,
+  .quick-mode-btn span,
+  .material-color-btn span {
+    display: none;
+  }
+
+  .add-btn .fa-solid,
+  .quick-mode-btn .fa-solid,
+  .material-color-btn .fa-solid {
+    font-size: 16px;
+  }
+
   .material-controls {
     gap: 4px;
   }
