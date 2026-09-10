@@ -83,12 +83,12 @@ const EDGE_EXTINGUISH_PX = 130; // ghost gone beyond this distance
 const EDGE_SECTOR_DEG = 75; // mouse must sit roughly in a candidate's sector
 
 function cornerWorld(p: Placement, ci: 0 | 1 | 2 | 3): [number, number, number] {
-  const { i, j, k } = p;
-  const dx = p.plane === 'z' && (ci === 1 || ci === 3) ? 1 : 0;
-  const dy = p.plane === 'z' && (ci === 2 || ci === 3) ? 1 : 0;
-  const dz = p.plane === 'y' && (ci === 2 || ci === 3) ? 1 : 0;
-  const dyy = p.plane === 'x' && (ci === 1 || ci === 3) ? 1 : 0;
-  return [(i + dx) * STEP, (j + dy + dyy) * STEP, (k + dz) * STEP];
+  const { i, j, k, plane } = p;
+  const far = ci === 2 || ci === 3;
+  const dx = ci === 1 || ci === 3 ? (plane !== 'x' ? 1 : 0) : 0;
+  const dy = (plane === 'z' || plane === 'x') && (plane === 'x' ? ci === 1 || ci === 3 : far) ? 1 : 0;
+  const dz = far && plane !== 'z' ? 1 : 0;
+  return [(i + dx) * STEP, (j + dy) * STEP, (k + dz) * STEP];
 }
 
 // The panel's 4 edges as lattice corner pairs.
@@ -469,7 +469,6 @@ function debugInfo(): {
   };
 }
 
-sceneCtx.controls.addEventListener('change', renderFrame);
 
  (window as unknown as Record<string, unknown>).__builder = { world, sceneCtx, debug: { info: debugInfo, raycaster, ndc, setNdc, updateHover, get anchors() { return connectorAnchors; } } };
 

@@ -90,19 +90,20 @@ export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', 
           out[kind] = { geometry: geo, materials: mats };
           colors[kind] = '#' + (mats[0] as THREE.MeshStandardMaterial).color.getHexString();
         }
-        // Connector hub mesh (no children). Canonicalize like the panels
-        // (thickness axis -> app Z is wrong for the hub: keep its own frame):
-        // recenter on the hub, scale model units (panel edge = 30) to inches.
+        // Connector hub mesh (no children, origin = the connection point:
+        // the bbox is asymmetric toward the cross-side protrusion, so
+        // DO NOT recenter - the origin must stay on the lattice corner).
+        // Canonicalize like the panels: bake the node frame, then the same
+        // rotateX(PI/2). Raw asset frame: plate in XY, cross side protrudes
+        // toward -Z (per the Connector_Connections anchor frames), which the
+        // rotation turns into the app-canonical cross axis +Y.
         const connNode = gltf.scene.getObjectByName('Connector') as THREE.Mesh | undefined;
         if (connNode) {
           connNode.updateMatrixWorld(true);
-          const cgeo = connNode.geometry.clone();
+          const rootInv = new THREE.Matrix4().copy(connNode.matrixWorld).invert();
+          const cgeo = connNode.geometry.clone().applyMatrix4(rootInv);
+          cgeo.rotateX(Math.PI / 2);
           const cmat = Array.isArray(connNode.material) ? connNode.material[0] : connNode.material;
-          cgeo.computeBoundingBox();
-          const cbb = cgeo.boundingBox!;
-          const ccenter = new THREE.Vector3();
-          cbb.getCenter(ccenter);
-          cgeo.translate(-ccenter.x, -ccenter.y, -ccenter.z);
           const cscale = STEP / 30;
           connectorAsset = { geometry: cgeo.scale(cscale, cscale, cscale), materials: [cmat] };
         }
@@ -199,18 +200,18 @@ function placePanel(obj: THREE.Group, p: Placement): void {
   if (p.plane === 'y') obj.rotation.x = -Math.PI / 2;
 }
 
-// The GLB connector, canonical orientation: cross-side structure protrudes
-// toward -Z, tangential (B*) side toward +Z. Placed orientation rotates the
-// canonical cross axis (0,-1,0) onto the connector's cross-panel direction
-// (plate normal * sign). All six targets are 90-degree-multiple rotations,
-// so the slot pattern stays aligned with the lattice.
+// The GLB connector, canonical orientation (after the shared rotateX(PI/2)):
+// plate in XZ, tangential (B*) side toward -Y, cross-side structure toward
+// +Y. Placed orientation rotates the canonical cross axis (0,1,0) onto the
+// connector's cross-panel direction (plate normal * sign). All six targets
+// are 90-degree-multiple rotations, so the slot pattern stays lattice-aligned.
 const ORIENT_QUATS: Record<string, THREE.Quaternion> = {
-  'y1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI),
-  'y-1': new THREE.Quaternion(),
-  'z1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2),
-  'z-1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2),
-  'x1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2),
-  'x-1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -Math.PI / 2),
+  'y1': new THREE.Quaternion(),
+  'y-1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI),
+  'z1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2),
+  'z-1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2),
+  'x1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -Math.PI / 2),
+  'x-1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2),
 };
 
 function buildConnector(conn: Connector, corner: [number, number, number], ghost: boolean, invalid = false): THREE.Group {
