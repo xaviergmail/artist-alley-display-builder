@@ -100,8 +100,9 @@ export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', 
         const connNode = gltf.scene.getObjectByName('Connector') as THREE.Mesh | undefined;
         if (connNode) {
           connNode.updateMatrixWorld(true);
-          const rootInv = new THREE.Matrix4().copy(connNode.matrixWorld).invert();
-          const cgeo = connNode.geometry.clone().applyMatrix4(rootInv);
+          // No children and no node TRS: the geometry is already in its
+          // node-local (asset) frame - do not bake matrixWorld.
+          const cgeo = connNode.geometry.clone();
           cgeo.rotateX(Math.PI / 2);
           const cmat = Array.isArray(connNode.material) ? connNode.material[0] : connNode.material;
           const cscale = STEP / 30;
