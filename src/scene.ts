@@ -59,8 +59,15 @@ export function loadPanelAssets(): Promise<Record<'grid' | 'outline' | 'plain', 
             geos.push(g);
             mats.push(Array.isArray(m.material) ? m.material[0] : m.material);
           });
-          const geo = mergeGeometries(geos, true);
-          if (!geo) throw new Error(`Panels.glb: could not merge meshes for "${kind}"`);
+          let geo = mergeGeometries(geos, true);
+          if (!geo) {
+            // Attribute/index mismatch: de-index everything and retry, else
+            // settle for the body mesh alone so one odd child can't kill the kind.
+            geo = mergeGeometries(geos.map((g) => (g.getIndex() ? g.toNonIndexed() : g)), true)
+              ?? mergeGeometries(geos.slice(0, 1).map((g) => (g.getIndex() ? g.toNonIndexed() : g)), true)
+              ?? geos[0];
+            console.warn(`Panels.glb: degraded merge for "${kind}"`);
+          }
           geo.rotateX(Math.PI / 2); // model thickness along Y -> app-canonical Z
           geo.computeBoundingBox();
           const bb = geo.boundingBox!;

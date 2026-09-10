@@ -303,8 +303,8 @@ sceneCtx.controls.addEventListener('change', renderFrame);
 // align the default sidebar swatches with the actual model materials.
 loadPanelAssets().then((colors) => {
   if (!colors) return;
-  for (const [id, t] of world.types) {
-    if (!t.custom && colors[t.kind]) world.types.set(id, { ...t, color: colors[t.kind] });
+  for (const t of world.types.values()) {
+    if (!t.custom && colors[t.kind]) t.color = colors[t.kind];
   }
   refresh();
 });
