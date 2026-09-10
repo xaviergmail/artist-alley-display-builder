@@ -137,10 +137,9 @@ html, body, #app {
 
 
 .sidebar-footer {
-  width: 100%;
+  width: 64px;
   margin-top: auto;
-  box-sizing: border-box;
-  padding-left: 12px;
+  padding: 0;
 }
 
 .dump-state-btn {
@@ -612,14 +611,16 @@ html, body, #app {
 
 .assembly-actions {
   display: grid;
-  grid-template-columns: repeat(2, 40px);
-  gap: 5px;
+  grid-template-columns: repeat(2, 30px);
+  gap: 4px;
 }
 
 .sidebar-action {
   display: grid;
-  place-items: center;
+  width: 30px;
   min-height: 31px;
+  padding: 0;
+  place-items: center;
   border: 1px solid #c3c9d1;
   border-radius: 7px;
   background: #fff;
