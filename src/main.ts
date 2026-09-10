@@ -28,7 +28,10 @@ const QUICK_MODE_KEY = 'artist-alley-display-builder:quick-mode';
 
 function restoreFromUrl(target: World): boolean {
   const url = new URL(window.location.href);
-  const raw = new URLSearchParams(url.hash.slice(1)).get(SHARE_PARAM);
+  const hashState = new URLSearchParams(url.hash.slice(1)).get(SHARE_PARAM);
+  // Read an existing query-link once; the first refresh rewrites it into the
+  // fragment form below, so newly copied URLs never put state in a request.
+  const raw = hashState ?? url.searchParams.get(SHARE_PARAM);
   if (!raw) return false;
   try {
     return target.restore(JSON.parse(raw) as AssemblyState);
