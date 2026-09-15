@@ -57,7 +57,7 @@ function hslToHex(h: number, s: number, l: number): string {
   const channel = (n: number) => Math.round(255 * (lightness - chroma * Math.max(-1, Math.min((n + h / 30) % 12 - 3, 9 - (n + h / 30) % 12, 1)))).toString(16).padStart(2, '0');
   return `#${channel(0)}${channel(8)}${channel(4)}`;
 }
-const GITHUB_URL = 'https://github.com/xaviergmail/artist-alley-display-builder';
+const GITHUB_URL = 'https://github.com/xaviergmail/cubizer';
 
 type ColorTarget =
   | { kind: 'new' }
