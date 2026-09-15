@@ -749,9 +749,6 @@ html, body, #app {
   color: #1e293b;
 }
 
-#mobile-landscape-gate {
-  display: none;
-}
 
 @media (max-width: 767px), (max-height: 480px) and (orientation: landscape) {
   #sidebar {
@@ -874,38 +871,17 @@ html, body, #app {
     font-size: 16px;
   }
 }
-
-@media (max-width: 767px) and (orientation: portrait) {
+/* Portrait phones: rotate the whole app 90° so the build surface is always
+   landscape — no "rotate your device" interstitial. main.ts remaps pointer
+   coordinates (canvasPoint) and drives orbit/pinch itself while this rule
+   is active. Desktop windows and landscape phones never match, because the
+   query additionally requires a coarse (touch) pointer. */
+@media (max-width: 767px) and (orientation: portrait) and (pointer: coarse) {
   #app {
-    visibility: hidden;
-  }
-
-  #mobile-landscape-gate {
-    position: fixed;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    padding: 32px;
-    background: #f4f5f7;
-    color: #1e293b;
-    text-align: center;
-    z-index: 100;
-  }
-
-  #mobile-landscape-gate div {
-    display: grid;
-    gap: 8px;
-    max-width: 260px;
-  }
-
-  #mobile-landscape-gate strong {
-    font-size: 20px;
-  }
-
-  #mobile-landscape-gate span {
-    color: #475569;
-    font-size: 14px;
-    line-height: 1.4;
+    width: 100vh;
+    height: 100vw;
+    transform: rotate(90deg) translateY(-100vw);
+    transform-origin: top left;
   }
 }
 
