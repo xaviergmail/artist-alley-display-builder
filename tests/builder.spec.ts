@@ -710,7 +710,7 @@ describe('history and drag upgrades', () => {
     await page.getByRole('button', { name: 'New assembly' }).click();
     await page.getByRole('button', { name: 'Continue' }).click();
     expect(await page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(0);
-    await page.locator('.design-list [data-design-name="UndoLoad"]').first().click();
+    await page.locator('button.saved-design', { hasText: 'UndoLoad' }).first().click();
     await page.getByRole('button', { name: 'Load' }).click();
     expect(await page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(1);
     await page.locator('button[title^="Undo"]').click();
