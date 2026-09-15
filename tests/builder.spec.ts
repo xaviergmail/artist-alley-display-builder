@@ -169,6 +169,89 @@ test('right-clicking a placed panel removes it', async ({ page }) => {
   ).toBe(0);
 });
 
+test('a click on an invalid edge ghost is rejected and reported', async ({ page }) => {
+  const diagnostics: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'warning') diagnostics.push(message.text());
+  });
+
+  const result = await page.evaluate(() => {
+    const b = (window as unknown as { __builder: any }).__builder;
+    const viewport = document.getElementById('viewport')!;
+    const canvas = b.sceneCtx.renderer.domElement as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    // The scan below dispatches thousands of synthetic pointer events; stub
+    // the WebGL draw so the scan stays logic-only and does not starve the
+    // browser's renderer queue for the following tests in this worker.
+    b.sceneCtx.renderer.render = () => {};
+    const proj = (w: [number, number, number]) => {
+      const o = { x: 0, y: 0, visible: false };
+      b.sceneCtx.projectToScreen(w, o, viewport);
+      return o.visible ? { x: o.x + rect.left, y: o.y + rect.top } : null;
+    };
+    const drive = (px: number, py: number, click: boolean) => {
+      const opts = { bubbles: true, cancelable: true, clientX: Math.round(px), clientY: Math.round(py), button: 0, pointerId: 1, pointerType: 'mouse', isPrimary: true };
+      canvas.dispatchEvent(new PointerEvent('pointermove', opts));
+      if (click) {
+        canvas.dispatchEvent(new PointerEvent('pointerdown', opts));
+        canvas.dispatchEvent(new PointerEvent('pointerup', opts));
+      }
+      return b.debug.info();
+    };
+
+    const a = proj([42, 0, -6]);
+    drive(a.x, a.y, true); // horizontal base panel
+    if (b.world.panels.size !== 1) return { fail: 'base placement' as const };
+
+    // A vertical panel: first valid non-horizontal ghost near the far-side edge
+    const leftEdgeMid = proj([36, 0, -6]);
+    let ghostPt: { x: number; y: number } | null = null;
+    for (let dx = 4; dx <= 30 && !ghostPt; dx += 3) {
+      for (let dy = -26; dy <= 26 && !ghostPt; dy += 4) {
+        const d = drive(leftEdgeMid.x + dx, leftEdgeMid.y + dy, false);
+        if (d.ghostPlacement && d.ghostPlacement.plane !== 'y' && !d.ghostInvalid) ghostPt = { x: leftEdgeMid.x + dx, y: leftEdgeMid.y + dy };
+      }
+    }
+    if (!ghostPt) return { fail: 'no vertical ghost' as const };
+    drive(ghostPt.x, ghostPt.y, true);
+    if (b.world.panels.size !== 2) return { fail: 'vertical placement' as const };
+    const vertical = [...b.world.panels.values()][1];
+
+    // Latch the vertical panel's edges, then find an off-panel invalid ghost
+    // (e.g. the below-table square) and click it: rejection + diagnostic.
+    const anchors = vertical.plane === 'z'
+      ? [proj([vertical.i * 12 + 6, 0, vertical.k * 12]), proj([vertical.i * 12 + 6, 0, vertical.k * 12 + 12]), proj([vertical.i * 12, 0, vertical.k * 12 + 6]), proj([vertical.i * 12 + 12, 0, vertical.k * 12 + 6])]
+      : [proj([vertical.i, 0, vertical.k * 12 + 6]), proj([vertical.i + 12, 0, vertical.k * 12 + 6]), proj([vertical.i + 6, 0, vertical.k * 12]), proj([vertical.i + 6, 0, vertical.k * 12 + 12])];
+    let clicked: { gp: unknown; before: number; after: number } | null = null;
+    for (const anc of anchors.filter(Boolean)) {
+      for (let dx = -45; dx <= 45 && !clicked; dx += 4) {
+        for (let dy = -30; dy <= 30 && !clicked; dy += 4) {
+          const d = drive(anc.x + dx, anc.y + dy, false);
+          if (d.ghostPlacement && d.ghostInvalid && !d.pickedPanel) {
+            const before = b.world.panels.size;
+            const gp = d.ghostPlacement;
+            drive(anc.x + dx, anc.y + dy, true);
+            clicked = { gp, before, after: b.world.panels.size };
+          }
+        }
+      }
+    }
+    return { vertical, clicked };
+  });
+
+  expect(result.fail).toBeUndefined();
+  expect(result.clicked).not.toBeNull();
+  expect(result.clicked!.before).toBe(2);
+  expect(result.clicked!.after).toBe(2); // the invalid ghost click placed nothing
+  await expect.poll(() => diagnostics.some((entry) => entry.includes('rejected-red-ghost-placement'))).toBe(true);
+  const diagnostic = JSON.parse(diagnostics.find((entry) => entry.includes('rejected-red-ghost-placement'))!);
+  expect(diagnostic).toMatchObject({
+    event: 'rejected-red-ghost-placement',
+    attempted: { action: 'place-panel', placement: result.clicked!.gp, panelTypeId: 'plain' },
+    assembly: { panels: expect.any(Array), connectors: expect.any(Array) },
+  });
+});
+
 
 test('clicking a sidebar type re-types the selected panel', async ({ page }) => {
   const box = await canvasBox(page);
