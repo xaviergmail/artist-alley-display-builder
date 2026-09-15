@@ -35,6 +35,8 @@ npm run preview  # serve the production build
 npm test         # Playwright specs (browsers: npx playwright install)
 ```
 
+The app runs entirely client-side; no backend required.
+
 ## Tech
 
 Vite + TypeScript + Three.js (no framework layer). Connectors render via `InstancedMesh` batches; the vendor chunk is split for cache-friendly deploys. Playwright specs live in `tests/builder.spec.ts`.
