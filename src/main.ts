@@ -662,11 +662,6 @@ function handleClick(): void {
     else placePanelAt(ghostPlacement);
     return;
   }
-  if (hoverPanelKey) {
-    world.selectedKey = world.selectedKey === hoverPanelKey ? null : hoverPanelKey;
-    refresh();
-    return;
-  }
   if (world.selectedKey) {
     world.selectedKey = null;
     refresh();

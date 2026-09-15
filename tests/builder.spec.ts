@@ -169,6 +169,7 @@ test('right-clicking a placed panel removes it', async ({ page }) => {
   ).toBe(0);
 });
 
+
 test('clicking a sidebar type re-types the selected panel', async ({ page }) => {
   const box = await canvasBox(page);
   await page.mouse.click(box.x + box.width * 0.42, box.y + box.height * 0.55); // place

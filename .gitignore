@@ -2,3 +2,4 @@ node_modules/
 dist/
 test-artifacts/
 *.blend1
+test-results/
