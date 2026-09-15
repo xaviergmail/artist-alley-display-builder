@@ -25,7 +25,7 @@ Cubizer is a 3D web app for planning artist-alley booths: assemble 12&Prime; squ
 - **Persistence & sharing** — named browser saves, autosaved work state, and a shareable URL that encodes the whole assembly (including panel colors and table size).
 - **Works on phones** — touch gestures for orbit/pan/zoom and a forced-landscape layout on small portrait screens.
 
-## Getting started
+## Developer instructions
 
 ```bash
 npm install
@@ -34,8 +34,6 @@ npm run build    # typecheck + production build to dist/
 npm run preview  # serve the production build
 npm test         # Playwright specs (browsers: npx playwright install)
 ```
-
-## Developer instructions
 
 ## Tech
 
