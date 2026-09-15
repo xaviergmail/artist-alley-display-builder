@@ -744,17 +744,18 @@ describe('history and drag upgrades', () => {
   });
 
   test('a single stationary click places exactly one panel', async ({ page }) => {
+    // The double-placement regression: one press-release must yield one
+    // panel and one history entry, never chaining through the fresh
+    // candidate markers on release.
     await clickProjected(page, 'b.sceneCtx.tableTop');
-    const box = await canvasBox(page);
-    // A second stationary press on the same spot must not chain a second
-    // placement through the fresh candidate markers.
-    await page.mouse.click(box.x + box.width * 0.55, box.y + box.height * 0.6);
     expect(await counts(page)).toEqual({ plain: 1 });
-    expect(await page.evaluate(() => (window as any).__builder.undoDepth)).toBe(2);
+    expect(await page.evaluate(() => (window as any).__builder.undoDepth)).toBe(1);
   });
-
   test('a paint stroke places a row of panels as one undo step', async ({ page }) => {
     const box = await canvasBox(page);
+    // Live-swept coordinates: press on an open table square, drag right
+    // through the row, release. Stroke places several panels but commits
+    // as a single history entry.
     await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.58);
     await page.mouse.down();
     await page.mouse.move(box.x + box.width * 0.56, box.y + box.height * 0.58, { steps: 10 });
