@@ -17,6 +17,9 @@ export interface UICallbacks {
   onNew(): void;
   onShare(): Promise<boolean>;
   onDumpState(): Promise<boolean>;
+  onUndo(): void;
+  onRedo(): void;
+  onTypePointerDown(id: string, event: PointerEvent): void;
 }
 
 const TRASH_ICON = '<i class="fa-solid fa-trash" aria-hidden="true"></i>';
@@ -84,6 +87,11 @@ export class UI {
   private confirmationDialog: HTMLDialogElement;
   private colorSliders!: { root: HTMLDivElement; h: HTMLInputElement; s: HTMLInputElement; l: HTMLInputElement; values: HTMLOutputElement[] };
   private countBar: HTMLDivElement;
+  private undoBtn: HTMLButtonElement;
+  private redoBtn: HTMLButtonElement;
+  private dragChip: HTMLDivElement;
+  private dragChipIcon: HTMLSpanElement;
+  private dragChipLabel: HTMLSpanElement;
 
   constructor(sidebar: HTMLElement, viewport: HTMLElement, private cbs: UICallbacks) {
     this.typeList = document.createElement('div');
@@ -129,14 +137,14 @@ export class UI {
       this.makeActionButton('New assembly', 'file', 'Start a fresh assembly', () => {
         this.requestConfirmation('Start a new assembly?', 'The current unsaved assembly will be replaced.', () => {
           this.cbs.onNew();
-          this.showStatus('Started a new assembly', 'success');
+          this.notify('Started a new assembly');
         });
       }),
       this.makeActionButton('Save design', 'floppy-disk', 'Save this assembly under a name', () => this.openDesignDialog('save')),
       this.makeActionButton('Load design', 'folder-open', 'Load a saved named design', () => this.openDesignDialog('load')),
       this.makeActionButton('Share', 'share-nodes', 'Copy a shareable assembly URL', async () => {
         const shared = await this.cbs.onShare();
-        this.showStatus(shared ? 'Share URL copied' : 'Could not copy share URL', shared ? 'success' : 'error');
+        this.notify(shared ? 'Share URL copied' : 'Could not copy share URL', shared ? 'success' : 'error');
       }),
     );
     const github = document.createElement('a');
@@ -149,6 +157,13 @@ export class UI {
     github.title = 'Open the project on GitHub';
     actions.appendChild(github);
     footer.appendChild(actions);
+
+    const historyRow = document.createElement('div');
+    historyRow.className = 'history-actions';
+    this.undoBtn = this.makeActionButton('Undo', 'rotate-left', 'Undo (Ctrl+Z / ⌘Z)', () => this.cbs.onUndo());
+    this.redoBtn = this.makeActionButton('Redo', 'rotate-right', 'Redo (Ctrl+Shift+Z / Ctrl+Y)', () => this.cbs.onRedo());
+    historyRow.append(this.undoBtn, this.redoBtn);
+    footer.appendChild(historyRow);
 
     this.dumpBtn = document.createElement('button');
     this.dumpBtn.className = 'dump-state-btn';
@@ -165,6 +180,14 @@ export class UI {
     this.status.setAttribute('role', 'status');
     this.status.setAttribute('aria-live', 'polite');
     viewport.appendChild(this.status);
+
+    this.dragChip = document.createElement('div');
+    this.dragChip.className = 'drag-chip';
+    this.dragChipIcon = document.createElement('span');
+    this.dragChipIcon.className = 'icon icon-plain';
+    this.dragChipLabel = document.createElement('span');
+    this.dragChip.append(this.dragChipIcon, this.dragChipLabel);
+    document.body.appendChild(this.dragChip);
 
     this.selectedTrash = this.makeOverlayTrash(viewport, () => this.cbs.onRemoveSelected());
 
@@ -374,7 +397,7 @@ export class UI {
         const saved = this.cbs.onSaveNamed(name);
         if (saved) {
           this.designDialog.close();
-          this.showStatus(`Saved “${name}”`, 'success');
+          this.notify(`Saved “${name}”`);
         } else {
           input.setAttribute('aria-invalid', 'true');
         }
@@ -427,7 +450,7 @@ export class UI {
             'The current unsaved assembly will be replaced.',
             () => {
               const loaded = this.cbs.onLoadNamed(name);
-              this.showStatus(loaded ? `Loaded “${name}”` : `Could not load “${name}”`, loaded ? 'success' : 'error');
+              this.notify(loaded ? `Loaded “${name}”` : `Could not load “${name}”`, loaded ? 'success' : 'error');
             },
           );
         });
@@ -454,12 +477,12 @@ export class UI {
     header.append(title, close);
     const steps = [
       ['Navigate', 'Drag with one finger or the left mouse button to orbit. Two fingers pan or pinch to zoom; the mouse wheel also zooms.'],
-      ['Place panels', 'Normal mode: tap the table once to place a panel, or tap a panel then tap one of the blue possible-panel previews (the preview under your cursor is outlined). Impossible placements are never shown.'],
-      ['Quick build', 'Turn on Quick build in the sidebar for the original hover-a-preview, click-to-place workflow.'],
+      ['Place panels', 'Normal mode: tap the table once to place a panel, or tap a panel then tap one of the blue possible-panel previews (the preview under your cursor is outlined). Hold and drag to paint panels across the table and previews. Impossible placements are never shown.'],
+      ['Drag to build', 'Drag any panel type from the sidebar onto the table to place it there, or onto a placed panel to re-type that panel.'],
       ['Connectors', 'Connectors are placed and aligned automatically. Free table-edge connectors face inward toward the chair.'],
       ['Panel types', 'Choose a panel type at left, or add any colored plain panel. The Metal and Connector controls set global finishes.'],
       ['Counts', 'The bar at the bottom lists each panel type and the total number of connectors.'],
-      ['Save and share', 'Save named designs and load them later in this browser. Share copies a URL with the entire assembly state for someone else.'],
+      ['Undo / Redo', 'The footer buttons (or Ctrl+Z / ⌘Z and Ctrl+Shift+Z / Ctrl+Y) step through placements, deletions, re-types, color changes, table resizes, and even new/loaded assemblies.'],
       ['Table size', 'Choose 3, 4, 6, or 8 feet from the controls above the table.'],
     ];
     const list = document.createElement('ol');
@@ -532,11 +555,30 @@ export class UI {
     }, 1600);
   }
 
-  private showStatus(message: string, kind: 'success' | 'error'): void {
+  notify(message: string, kind: 'success' | 'error' = 'success'): void {
     window.clearTimeout(this.statusTimer);
     this.status.textContent = message;
     this.status.className = `action-status visible ${kind}`;
     this.statusTimer = window.setTimeout(() => { this.status.className = 'action-status'; }, 2200);
+  }
+
+  setHistoryState(canUndo: boolean, canRedo: boolean): void {
+    this.undoBtn.disabled = !canUndo;
+    this.redoBtn.disabled = !canRedo;
+  }
+
+  setDragChip(info: { kind: PanelType['kind']; color: string; x: number; y: number; mode: 'place' | 'replace' } | null): void {
+    if (!info) {
+      this.dragChip.classList.remove('visible', 'replace');
+      return;
+    }
+    this.dragChipIcon.className = `icon icon-${info.kind}`;
+    this.dragChipIcon.style.setProperty('--swatch', info.color);
+    this.dragChipLabel.textContent = info.mode === 'replace' ? 'Drop to re-type panel' : 'Drop to place panel';
+    this.dragChip.classList.toggle('replace', info.mode === 'replace');
+    this.dragChip.style.left = `${info.x}px`;
+    this.dragChip.style.top = `${info.y}px`;
+    this.dragChip.classList.add('visible');
   }
 
   private makeTypeEntry(type: PanelType, active: boolean): HTMLDivElement {
@@ -550,6 +592,7 @@ export class UI {
     icon.style.setProperty('--swatch', type.color);
     btn.appendChild(icon);
     btn.addEventListener('click', () => this.cbs.onTypeClick(type.id));
+    btn.addEventListener('pointerdown', (event) => this.cbs.onTypePointerDown(type.id, event));
     entry.appendChild(btn);
 
     if (type.kind === 'plain') {

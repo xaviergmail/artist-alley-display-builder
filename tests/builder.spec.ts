@@ -658,11 +658,88 @@ test('new assembly requires confirmation and preserves named browser saves', asy
   await page.getByRole('button', { name: 'New assembly' }).click();
   await expect(page.locator('.confirmation-dialog')).toBeVisible();
   await page.getByRole('button', { name: 'Continue' }).click();
-
   const state = await page.evaluate(() => {
     const b = (window as any).__builder;
     return { panels: b.world.panels.size, names: JSON.parse(localStorage.getItem('artist-alley-display-builder:designs-v1')!).designs.map((design: { name: string }) => design.name) };
   });
   expect(state.panels).toBe(0);
   expect(state.names).toContain('Recovery');
+});
+
+describe('history and drag upgrades', () => {
+  async function counts(page: Page): Promise<Record<string, number>> {
+    return await page.evaluate(() => {
+      const b = (window as any).__builder;
+      const counts: Record<string, number> = {};
+      for (const p of b.world.panels.values()) counts[p.typeId] = (counts[p.typeId] || 0) + 1;
+      return counts;
+    });
+  }
+
+  test('undo and redo buttons are disabled before the first change and drive history', async ({ page }) => {
+    const undo = page.locator('button[title^="Undo"]');
+    const redo = page.locator('button[title^="Redo"]');
+    await expect(undo).toBeDisabled();
+    await expect(redo).toBeDisabled();
+    await clickProjected(page, 'b.sceneCtx.tableTop');
+    await expect(undo).toBeEnabled();
+    await expect(redo).toBeDisabled();
+    await undo.click();
+    expect(await page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(0);
+    await expect(redo).toBeEnabled();
+    await redo.click();
+    expect(await page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(1);
+    await expect(undo).toBeEnabled();
+  });
+
+  test('keyboard Ctrl+Z undoes and Ctrl+Shift+Z redoes a placement', async ({ page }) => {
+    await page.locator('.quick-mode-btn').click();
+    await clickProjected(page, 'b.sceneCtx.tableTop');
+    expect(await page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(1);
+    await page.keyboard.press('Control+z');
+    expect(await page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(0);
+    await page.keyboard.press('Control+Shift+z');
+    expect(await page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(1);
+  });
+
+  test('loading a named design steps undo back to the pre-load assembly', async ({ page }) => {
+    await clickProjected(page, 'b.sceneCtx.tableTop');
+    await page.getByRole('button', { name: 'Save design' }).click();
+    await page.locator('.design-name-field input').fill('UndoLoad');
+    await page.getByRole('button', { name: 'Save design' }).last().click();
+    await page.getByRole('button', { name: 'New assembly' }).click();
+    await page.getByRole('button', { name: 'Continue' }).click();
+    expect(await page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(0);
+    await page.locator('.design-list [data-design-name="UndoLoad"]').first().click();
+    await page.getByRole('button', { name: 'Load' }).click();
+    expect(await page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(1);
+    await page.locator('button[title^="Undo"]').click();
+    expect(await page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(0);
+  });
+
+  test('dragging a type chip onto the table places that type', async ({ page }) => {
+    const box = await canvasBox(page);
+    const chip = page.locator('[data-type-id="grid"]');
+    const chipBox = await chip.boundingBox();
+    if (!chipBox) throw new Error('chip not found');
+    await page.mouse.move(chipBox.x + chipBox.width / 2, chipBox.y + chipBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.58, { steps: 5 });
+    await page.mouse.up();
+    expect(await counts(page)).toEqual({ grid: 1 });
+  });
+
+  test('dragging a type chip onto a placed panel retypes it', async ({ page }) => {
+    await clickProjected(page, 'b.sceneCtx.tableTop');
+    const box = await canvasBox(page);
+    const chip = page.locator('[data-type-id="outline"]');
+    const chipBox = await chip.boundingBox();
+    if (!chipBox) throw new Error('chip not found');
+    await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.55);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.55, box.y + box.height * 0.6, { steps: 3 });
+    await page.mouse.move(box.x + box.width * 0.55, box.y + box.height * 0.6);
+    await page.mouse.up();
+    expect(await counts(page)).toEqual({ outline: 1 });
+  });
 });

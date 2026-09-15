@@ -148,7 +148,7 @@ export function loadPanelAssets(): Promise<ModelMaterialDefaults | null> {
         const cmat = Array.isArray(connNode.material) ? connNode.material[0] : connNode.material;
         const connectorSource = namedMaterial([cmat], ['Connector', 'Black Plastic Connector', 'Black Plastic']);
         const cscale = STEP / 30;
-        connectorAsset = { geometry: cgeo.scale(cscale, cscale, cscale), materials: [connectorSource] };
+        connectorAsset = { geometry: shareGeometry(cgeo.scale(cscale, cscale, cscale)), materials: [connectorSource] };
 
         for (const material of [...panelSources, connectorSource]) material.userData[SHARED_MATERIAL] = true;
         modelMaterials = {
@@ -321,34 +321,65 @@ const ORIENT_QUATS: Record<string, THREE.Quaternion> = {
   'x-1': new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2),
 };
 
-function buildConnector(
-  conn: Connector,
-  corner: [number, number, number],
-  ghost: boolean,
-  invalid = false,
-  connectorColor = '#2b2f33',
-): THREE.Group {
-  const g = new THREE.Group();
-  if (connectorAsset) {
-    const material = ghost
-      ? (invalid ? GHOST_CONNECTOR_MATS.bad : GHOST_CONNECTOR_MATS.ok)
-      : modelMaterials?.connector ?? connectorAsset.materials[0];
-    const mesh = new THREE.Mesh(shareGeometry(connectorAsset.geometry), material);
-    mesh.quaternion.copy(ORIENT_QUATS[`${conn.plane}${conn.sign}`]);
-    if (conn.turn) mesh.rotateY(conn.turn * Math.PI / 2);
-    mesh.castShadow = false;
-    g.add(mesh);
-  } else {
-    // Fallback while the model loads: small dark cube at the hub.
-    g.add(new THREE.Mesh(
-      GHOST_CUBE_GEO,
-      ghost
-        ? (invalid ? GHOST_CONNECTOR_MATS.bad : GHOST_CONNECTOR_MATS.ok)
-        : new THREE.MeshStandardMaterial({ color: connectorColor, roughness: 0.5, metalness: 0.4 }),
-    ));
+// Connector orientation math. Object3D.rotateY post-multiplies a local-Y
+// spin onto the base orientation, so `q_base * qY(turn)` reproduces the
+// quaternion a mesh gets from `quaternion.copy(ORIENT)` + `rotateY(turn)`.
+const QUARTER_TURN_Y = [0, 1, 2, 3].map((turn) =>
+  new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), (turn * Math.PI) / 2),
+);
+
+function connectorQuaternion(conn: Connector, out: THREE.Quaternion): THREE.Quaternion {
+  out.copy(ORIENT_QUATS[`${conn.plane}${conn.sign}`]);
+  if (conn.turn) out.multiply(QUARTER_TURN_Y[conn.turn]);
+  return out;
+}
+
+// One connector hub differs from the next only by lattice position and
+// orientation, so every hub of a batch shares one geometry, one material,
+// and one InstancedMesh: a rebuild becomes N matrix writes + 1 draw call
+// instead of N Group/Mesh allocations. The orientation quaternion rides in
+// the instance matrix, so no per-orientation bucketing is needed.
+function batchConnectors(
+  connectors: Map<string, Connector>,
+  geometry: THREE.BufferGeometry,
+  material: THREE.Material,
+  group: THREE.Group,
+): THREE.InstancedMesh {
+  const mesh = new THREE.InstancedMesh(geometry, material, connectors.size);
+  mesh.castShadow = false;
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3(1, 1, 1);
+  const matrix = new THREE.Matrix4();
+  let index = 0;
+  for (const [key, conn] of connectors) {
+    const corner = parsePointKey(key);
+    position.set(corner[0] * STEP, corner[1] * STEP, corner[2] * STEP);
+    connectorQuaternion(conn, quaternion);
+    mesh.setMatrixAt(index++, matrix.compose(position, quaternion, scale));
   }
-  g.position.set(corner[0] * STEP, corner[1] * STEP, corner[2] * STEP);
-  return g;
+  group.add(mesh);
+  return mesh;
+}
+
+// InstancedMesh.dispose() only frees the per-instance buffers; geometry and
+// material are shared and must survive batch replacement.
+function disposeBatch(batch: THREE.InstancedMesh | null): null {
+  if (batch) {
+    batch.parent?.remove(batch);
+    batch.dispose();
+  }
+  return null;
+}
+
+let connectorFallbackMaterial: THREE.MeshStandardMaterial | null = null;
+function darkCubeMaterial(color: string): THREE.MeshStandardMaterial {
+  if (!connectorFallbackMaterial) {
+    connectorFallbackMaterial = new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.4 });
+    connectorFallbackMaterial.userData[SHARED_MATERIAL] = true;
+  }
+  connectorFallbackMaterial.color.set(color);
+  return connectorFallbackMaterial;
 }
 
 export interface ScreenPos {
@@ -370,6 +401,8 @@ export class SceneCtx {
   tableTop: THREE.Mesh | null = null;
   private tableLength = 72;
   private panelMeshes = new Map<string, THREE.Object3D>();
+  private connectorBatch: THREE.InstancedMesh | null = null;
+  private ghostConnectorBatch: THREE.InstancedMesh | null = null;
   private selectionHelper: THREE.Mesh;
   private hoverOutline: THREE.LineSegments;
 
@@ -523,7 +556,7 @@ export class SceneCtx {
   rebuild(world: World, showSelection = true): void {
     this.syncModelMaterials(world);
     clearGroup(this.panelGroup);
-    clearGroup(this.connectorGroup);
+    this.connectorBatch = disposeBatch(this.connectorBatch);
     this.panelMeshes.clear();
     for (const panel of world.panels.values()) {
       const type = world.types.get(panel.typeId);
@@ -534,11 +567,15 @@ export class SceneCtx {
       this.panelGroup.add(obj);
       this.panelMeshes.set(panelKey(panel), obj);
     }
-    for (const [key, conn] of world.connectors) {
-      this.connectorGroup.add(buildConnector(conn, parsePointKey(key), false, false, world.connectorColor));
+    if (world.connectors.size > 0) {
+      const material = connectorAsset
+        ? modelMaterials?.connector ?? connectorAsset.materials[0]
+        : darkCubeMaterial(world.connectorColor);
+      this.connectorBatch = batchConnectors(world.connectors, connectorAsset ? connectorAsset.geometry : GHOST_CUBE_GEO, material, this.connectorGroup);
     }
     this.updateSelection(world, showSelection);
   }
+
 
   private updateSelection(world: World, showSelection: boolean): void {
     const mesh = showSelection && world.selectedKey ? this.panelMeshes.get(world.selectedKey) : undefined;
@@ -552,13 +589,17 @@ export class SceneCtx {
   }
 
   setGhost(ghost: GhostSpec | null): void {
+    // Dispose the ghost hub batch before clearGroup: the meshes live in the
+    // group but their instance buffers are not reachable from disposeObject.
+    this.ghostConnectorBatch = disposeBatch(this.ghostConnectorBatch);
     clearGroup(this.ghostGroup);
     if (!ghost) return;
     const obj = buildPanelContent(ghost.type, true, ghost.invalid === true);
     placePanel(obj, ghost.placement);
     this.ghostGroup.add(obj);
-    for (const [key, conn] of ghost.connectors) {
-      this.ghostGroup.add(buildConnector(conn, parsePointKey(key), true, ghost.invalid === true));
+    if (ghost.connectors.size > 0) {
+      const material = ghost.invalid === true ? GHOST_CONNECTOR_MATS.bad : GHOST_CONNECTOR_MATS.ok;
+      this.ghostConnectorBatch = batchConnectors(ghost.connectors, connectorAsset ? connectorAsset.geometry : GHOST_CUBE_GEO, material, this.ghostGroup);
     }
   }
 

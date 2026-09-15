@@ -614,6 +614,12 @@ html, body, #app {
   gap: 4px;
 }
 
+.history-actions {
+  display: grid;
+  grid-template-columns: repeat(2, 30px);
+  gap: 4px;
+}
+
 .github-action {
   grid-column: 1 / -1;
   width: 64px;
@@ -798,6 +804,11 @@ html, body, #app {
     gap: 2px;
   }
 
+  .history-actions {
+    grid-template-columns: repeat(2, 23px);
+    gap: 2px;
+  }
+
   .sidebar-action {
     width: 23px;
     min-height: 25px;
@@ -870,4 +881,57 @@ html, body, #app {
     font-size: 14px;
     line-height: 1.4;
   }
+}
+
+/* ------------------------------------------------------------ drag-to-place */
+
+.drag-chip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  display: none;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 11px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.18);
+  color: #334155;
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+  transform: translate(-50%, 18px);
+  z-index: 60;
+}
+
+.drag-chip.visible {
+  display: flex;
+}
+
+.drag-chip.replace {
+  border-color: var(--accent);
+  color: #2563eb;
+}
+
+.drag-chip .icon {
+  position: relative;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+}
+
+body.type-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+body.type-dragging .type-btn {
+  cursor: grabbing;
+}
+
+.sidebar-action:disabled {
+  opacity: 0.4;
+  pointer-events: none;
 }

@@ -397,13 +397,14 @@ function refresh(): void {
   ui.updateMaterials(world.metalColor, world.connectorColor);
   ui.setTableActive(world.tableLength);
   ui.setAssemblyCounts(world.types, world.panels, world.connectors.size);
+  ui.setHistoryState(historyPointer > 0, historyPointer < assemblyHistory.length - 1);
   syncUrl(world);
   renderFrame();
 }
 
-function placePanelAt(p: Placement): void {
+function placePanelAt(p: Placement, typeId: string = world.activeTypeId): void {
   if (!world.canPlace(p)) return;
-  const panel = world.place(p, world.activeTypeId);
+  const panel = world.place(p, typeId);
   if (buildMode === 'quick') {
     world.selectedKey = null;
     clearNormalCandidates();
@@ -416,6 +417,62 @@ function placePanelAt(p: Placement): void {
     refresh();
     showNormalCandidates(candidatesForPanel(p));
   }
+  commitHistory();
+}
+
+// ---------------------------------------------------------------- undo
+
+const HISTORY_LIMIT = 100;
+// Pointer-based undo/redo: assemblyHistory[i] holds the assembly snapshot
+// after step i (index 0 is the initial state). Mutators call commitHistory()
+// once their world mutation is complete; it drops the redo tail past the
+// pointer before appending, so branching mutations discard their redo path.
+const assemblyHistory: AssemblyState[] = [world.toJSON()];
+let historyPointer = 0;
+
+function commitHistory(): void {
+  assemblyHistory.splice(historyPointer + 1);
+  assemblyHistory.push(world.toJSON());
+  if (assemblyHistory.length > HISTORY_LIMIT) assemblyHistory.shift();
+  historyPointer = assemblyHistory.length - 1;
+}
+
+function restoreHistoryEntry(): void {
+  sceneCtx.setTableLength(world.tableLength);
+  clearHover();
+  clearNormalCandidates();
+  refresh();
+}
+
+function undoHistory(): boolean {
+  if (historyPointer <= 0) {
+    ui.notify('Nothing left to undo', 'error');
+    return false;
+  }
+  historyPointer -= 1;
+  if (!world.restore(assemblyHistory[historyPointer]!)) {
+    historyPointer += 1;
+    ui.notify('Could not undo that change', 'error');
+    return false;
+  }
+  restoreHistoryEntry();
+  ui.notify('Undid the last change');
+  return true;
+}
+
+function redoHistory(): boolean {
+  if (historyPointer >= assemblyHistory.length - 1) {
+    ui.notify('Nothing left to redo', 'error');
+    return false;
+  }
+  historyPointer += 1;
+  if (!world.restore(assemblyHistory[historyPointer]!)) {
+    historyPointer -= 1;
+    ui.notify('Could not redo that change', 'error');
+    return false;
+  }
+  restoreHistoryEntry();
+  return true;
 }
 
 function assemblyJson(): string {
@@ -514,11 +571,12 @@ function loadDesign(name: string): boolean {
   try {
     migrateLegacySave();
     const raw = localStorage.getItem(designKey(name));
-    if (!raw || !world.restore(JSON.parse(raw) as AssemblyState)) return false;
-    sceneCtx.setTableLength(world.tableLength);
-    clearHover();
-    clearNormalCandidates();
-    refresh();
+    if (!raw) return false;
+    // The snapshot is committed after the restore so undo steps back to
+    // exactly what the user had before loading.
+    if (!world.restore(JSON.parse(raw) as AssemblyState)) return false;
+    commitHistory();
+    restoreHistoryEntry();
     return true;
   } catch (error) {
     console.error('Could not load design', error);
@@ -532,8 +590,7 @@ function startNewAssembly(): void {
   // `world` is shared by the renderer and picking helpers, so restore its
   // canonical empty state instead of replacing its object identity.
   if (!world.restore(fresh.toJSON())) throw new Error('Could not reset assembly state');
-  sceneCtx.setTableLength(world.tableLength);
-  clearHover();
+  commitHistory();
   clearNormalCandidates();
   refresh();
 }
@@ -548,6 +605,7 @@ async function copyShareUrl(): Promise<boolean> {
 }
 
 function logRejectedGhostClick(placement: Placement): void {
+  ui.notify('That square cannot hold a panel', 'error');
   console.warn(JSON.stringify({
     event: 'rejected-red-ghost-placement',
     attempted: {
@@ -612,7 +670,11 @@ function handleNormalTap(clientX: number, clientY: number): void {
 const ui = new UI(sidebar, viewport, {
   onTypeClick: (id) => {
     world.activeTypeId = id;
-    if (world.selectedKey) world.retype(world.selectedKey, id);
+    const selected = world.selectedKey ? world.panel(world.selectedKey) : null;
+    if (world.selectedKey && selected && selected.typeId !== id) {
+      world.retype(world.selectedKey, id);
+      commitHistory();
+    }
     refresh();
     if (buildMode === 'quick') updateHover(lastMouse.x, lastMouse.y);
     else if (normalCandidates.size > 0) showNormalCandidates([...normalCandidates.values()]);
@@ -621,6 +683,7 @@ const ui = new UI(sidebar, viewport, {
     const type = world.addCustomType(color);
     world.activeTypeId = type.id;
     refresh();
+    commitHistory();
     return type.id;
   },
   onSetTypeColor: (id, color) => {
@@ -629,6 +692,7 @@ const ui = new UI(sidebar, viewport, {
     ui.updateTypes(world.types, world.activeTypeId);
     syncUrl(world);
     renderFrame();
+    commitHistory();
   },
   onSetMaterialColor: (target, color) => {
     world.setMaterialColor(target, color);
@@ -636,17 +700,20 @@ const ui = new UI(sidebar, viewport, {
     ui.updateMaterials(world.metalColor, world.connectorColor);
     syncUrl(world);
     renderFrame();
+    commitHistory();
   },
   onRemoveType: (id, replacementId) => {
     world.removeType(id, replacementId);
     clearNormalCandidates();
     refresh();
+    commitHistory();
   },
   onRemoveSelected: () => {
     if (!world.selectedKey) return;
     world.removePanel(world.selectedKey);
     clearNormalCandidates();
     refresh();
+    commitHistory();
   },
   onTableSelect: (len) => {
     if (world.tableLength === len) return;
@@ -654,6 +721,7 @@ const ui = new UI(sidebar, viewport, {
     sceneCtx.setTableLength(len);
     clearNormalCandidates();
     refresh();
+    commitHistory();
   },
   onQuickModeChange: (enabled) => {
     buildMode = enabled ? 'quick' : 'normal';
@@ -670,6 +738,9 @@ const ui = new UI(sidebar, viewport, {
   onNew: () => startNewAssembly(),
   onShare: () => copyShareUrl(),
   onDumpState: () => copyAssemblyJson(),
+  onUndo: undoHistory,
+  onRedo: redoHistory,
+  onTypePointerDown: startTypeDrag,
 });
 sceneCtx.setPlacementMode(buildMode);
 ui.setQuickMode(buildMode === 'quick', false);
@@ -706,6 +777,7 @@ canvas.addEventListener('pointerdown', (e) => {
 
 canvas.addEventListener('pointermove', (e) => {
   lastMouse = { x: e.clientX, y: e.clientY };
+  if (typeDrag) return;
   const pointer = activePointers.get(e.pointerId);
   if (pointer) {
     const slop = e.pointerType === 'mouse' ? 5 : 10;
@@ -733,6 +805,7 @@ canvas.addEventListener('pointerup', (e) => {
       clearHover();
       clearNormalCandidates();
       refresh();
+      commitHistory();
     } else if (buildMode === 'quick') {
       updateHover(e.clientX, e.clientY);
     }
@@ -773,6 +846,120 @@ window.addEventListener('resize', () => {
   sceneCtx.camera.updateProjectionMatrix();
   sceneCtx.renderer.setSize(viewport.clientWidth, viewport.clientHeight);
   renderFrame();
+});
+
+// ---------------------------------------------------------------- drag-to-place
+
+type DragMode = 'place' | 'replace' | 'none';
+let typeDrag: { typeId: string } | null = null;
+const DRAG_START_PX = 6;
+
+interface DragTarget {
+  mode: DragMode;
+  panelKeyHit: string | null;
+  placement: Placement | null;
+}
+
+function dragTarget(clientX: number, clientY: number): DragTarget {
+  const rect = canvas.getBoundingClientRect();
+  if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+    return { mode: 'none', panelKeyHit: null, placement: null };
+  }
+  setNdc(clientX, clientY);
+  raycaster.setFromCamera(ndc, sceneCtx.camera);
+  const picked = pick();
+  if (picked.panelKeyHit) return { mode: 'replace', panelKeyHit: picked.panelKeyHit, placement: null };
+  const placement = picked.tablePoint ? tableCandidate(picked.tablePoint) : null;
+  return { mode: placement ? 'place' : 'none', panelKeyHit: null, placement };
+}
+
+function updateTypeDrag(clientX: number, clientY: number): void {
+  if (!typeDrag) return;
+  const type = world.types.get(typeDrag.typeId);
+  if (!type) {
+    endTypeDrag(false, clientX, clientY);
+    return;
+  }
+  const target = dragTarget(clientX, clientY);
+  sceneCtx.setGhost(target.mode === 'place' && target.placement
+    ? { placement: target.placement, type, connectors: world.orientationsFor(target.placement), invalid: false }
+    : null);
+  canvas.style.cursor = target.mode === 'none' ? 'default' : 'copy';
+  ui.setDragChip(target.mode === 'none'
+    ? null
+    : { kind: type.kind, color: type.color, x: clientX, y: clientY, mode: target.mode });
+  renderFrame();
+}
+
+function endTypeDrag(commit: boolean, clientX: number, clientY: number): void {
+  const drag = typeDrag;
+  typeDrag = null;
+  document.body.classList.remove('type-dragging');
+  ui.setDragChip(null);
+  sceneCtx.setGhost(null);
+  canvas.style.cursor = 'default';
+  if (!drag) return;
+  if (commit) {
+    const type = world.types.get(drag.typeId);
+    const target = dragTarget(clientX, clientY);
+    if (type && target.mode === 'replace' && target.panelKeyHit) {
+      const panel = world.panel(target.panelKeyHit);
+      if (panel && panel.typeId !== type.id) {
+        const from = panel.typeId;
+        world.retype(target.panelKeyHit, type.id);
+        world.activeTypeId = type.id;
+        refresh();
+        commitHistory();
+        ui.notify(`Panel re-typed: “${from}” → “${type.id}”`);
+      }
+    } else if (type && target.mode === 'place' && target.placement) {
+      world.activeTypeId = type.id;
+      placePanelAt(target.placement);
+      ui.notify(`Placed “${type.id}” panel`);
+    }
+  }
+  renderFrame();
+}
+
+function startTypeDrag(id: string, event: PointerEvent): void {
+  if (event.button !== 0 || event.pointerType !== 'mouse' || !world.types.has(id)) return;
+  const originX = event.clientX;
+  const originY = event.clientY;
+  document.body.classList.add('type-dragging');
+  const move = (ev: PointerEvent) => {
+    if (!typeDrag) {
+      if (Math.hypot(ev.clientX - originX, ev.clientY - originY) < DRAG_START_PX) return;
+      typeDrag = { typeId: id };
+      clearHover();
+      clearNormalCandidates();
+    }
+    updateTypeDrag(ev.clientX, ev.clientY);
+  };
+  const finish = (commit: boolean) => (ev: PointerEvent) => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', cancel);
+    endTypeDrag(commit, ev.clientX, ev.clientY);
+  };
+  const up = finish(true);
+  const cancel = finish(false);
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', cancel);
+}
+
+window.addEventListener('keydown', (e) => {
+  const el = e.target as HTMLElement | null;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+  const key = e.key.toLowerCase();
+  if ((e.ctrlKey || e.metaKey) && key === 'z' && !e.altKey) {
+    e.preventDefault();
+    if (e.shiftKey) redoHistory();
+    else undoHistory();
+  } else if ((e.ctrlKey || e.metaKey) && key === 'y' && !e.altKey) {
+    e.preventDefault();
+    redoHistory();
+  }
 });
 
 // ---------------------------------------------------------------- rendering
@@ -842,7 +1029,7 @@ function debugInfo(): {
 }
 
 
- (window as unknown as Record<string, unknown>).__builder = { world, sceneCtx, debug: { info: debugInfo, raycaster, ndc, setNdc, updateHover, get anchors() { return connectorAnchors; }, get gesture() { return { camDragging, touchGesture, activePointerCount: activePointers.size, normalCandidateCount: normalCandidates.size }; } } };
+ (window as unknown as Record<string, unknown>).__builder = { world, sceneCtx, undo: undoHistory, redo: redoHistory, get undoDepth() { return historyPointer; }, get redoDepth() { return assemblyHistory.length - 1 - historyPointer; }, startTypeDrag, debug: { info: debugInfo, raycaster, ndc, setNdc, updateHover, get anchors() { return connectorAnchors; }, get gesture() { return { camDragging, touchGesture, activePointerCount: activePointers.size, normalCandidateCount: normalCandidates.size }; } } };
 
 loadPanelAssets().then((defaults) => {
   if (defaults) {

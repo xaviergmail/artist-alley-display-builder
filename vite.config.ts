@@ -8,4 +8,13 @@ export default defineConfig({
     host: true,
     allowedHosts: true,
   },
+  build: {
+    // Ship three.js (~600KB core) as its own cached vendor chunk so app-code
+    // changes don't invalidate it and the entry chunk stays small.
+    rollupOptions: {
+      output: {
+        manualChunks: { three: ['three'] },
+      },
+    },
+  },
 });
