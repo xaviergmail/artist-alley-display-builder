@@ -459,6 +459,9 @@ function commitHistory(): void {
   assemblyHistory.push(world.toJSON());
   if (assemblyHistory.length > HISTORY_LIMIT) assemblyHistory.shift();
   historyPointer = assemblyHistory.length - 1;
+  // Sync the footer buttons here: mutators tend to refresh() before they
+  // commit, and the button state must reflect the new pointer.
+  ui.setHistoryState(historyPointer > 0, historyPointer < assemblyHistory.length - 1);
 }
 
 function restoreHistoryEntry(): void {
@@ -645,6 +648,15 @@ function logRejectedGhostClick(placement: Placement): void {
 }
 
 function handleClick(): void {
+  // A tap landing on a placed panel selects it, even when an edge ghost is
+  // pending: the capture path would have started a paint session for any
+  // placeable ghost, so a ghost that survives to the tap is either invalid
+  // or unreachable — the user's click is on the panel.
+  if (hoverPanelKey) {
+    world.selectedKey = world.selectedKey === hoverPanelKey ? null : hoverPanelKey;
+    refresh();
+    return;
+  }
   if (ghostPlacement) {
     if (ghostInvalid) logRejectedGhostClick(ghostPlacement);
     else placePanelAt(ghostPlacement);
@@ -818,7 +830,6 @@ function endPaintSession(): void {
   if (!paintSession) return;
   if (paintSession.placed > 0) {
     commitHistory();
-    ui.setHistoryState(historyPointer > 0, historyPointer < assemblyHistory.length - 1);
   }
   paintSession = null;
   sceneCtx.controls.enabled = true;
