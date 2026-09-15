@@ -742,4 +742,27 @@ describe('history and drag upgrades', () => {
     await page.mouse.up();
     expect(await counts(page)).toEqual({ outline: 1 });
   });
+
+  test('a single stationary click places exactly one panel', async ({ page }) => {
+    await clickProjected(page, 'b.sceneCtx.tableTop');
+    const box = await canvasBox(page);
+    // A second stationary press on the same spot must not chain a second
+    // placement through the fresh candidate markers.
+    await page.mouse.click(box.x + box.width * 0.55, box.y + box.height * 0.6);
+    expect(await counts(page)).toEqual({ plain: 1 });
+    expect(await page.evaluate(() => (window as any).__builder.undoDepth)).toBe(2);
+  });
+
+  test('a paint stroke places a row of panels as one undo step', async ({ page }) => {
+    const box = await canvasBox(page);
+    await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.58);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.56, box.y + box.height * 0.58, { steps: 10 });
+    await page.mouse.up();
+    const panels = await page.evaluate(() => (window as any).__builder.world.panels.size);
+    expect(panels).toBeGreaterThan(1);
+    expect(await page.evaluate(() => (window as any).__builder.undoDepth)).toBe(1);
+    await page.locator('button[title^="Undo"]').click();
+    expect(await page.evaluate(() => (window as any).__builder.world.panels.size)).toBe(0);
+  });
 });
