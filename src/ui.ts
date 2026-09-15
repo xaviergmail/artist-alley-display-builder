@@ -20,6 +20,7 @@ export interface UICallbacks {
   onUndo(): void;
   onRedo(): void;
   onTypePointerDown(id: string, event: PointerEvent): void;
+  onResetView(): void;
 }
 
 const TRASH_ICON = '<i class="fa-solid fa-trash" aria-hidden="true"></i>';
@@ -199,6 +200,15 @@ export class UI {
     help.setAttribute('aria-label', 'Show builder tutorial');
     help.addEventListener('click', () => this.tutorialDialog.showModal());
     viewport.appendChild(help);
+
+    const cameraReset = document.createElement('button');
+    cameraReset.className = 'camera-btn';
+    cameraReset.type = 'button';
+    cameraReset.innerHTML = ICON('camera-rotate');
+    cameraReset.title = 'Reset camera to default view';
+    cameraReset.setAttribute('aria-label', 'Reset camera to default view');
+    cameraReset.addEventListener('click', () => this.cbs.onResetView());
+    viewport.appendChild(cameraReset);
 
     const selector = document.createElement('div');
     selector.id = 'table-selector';

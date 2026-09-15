@@ -692,6 +692,24 @@ html, body, #app {
   z-index: 10;
 }
 
+.camera-btn {
+  position: absolute;
+  top: 14px;
+  right: 72px;
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.22);
+  color: #fff;
+  cursor: pointer;
+  font-size: 21px;
+  z-index: 10;
+}
+
 .tutorial-dialog {
   width: min(520px, calc(100vw - 32px));
   padding: 20px;
@@ -846,6 +864,14 @@ html, body, #app {
     width: 34px;
     height: 34px;
     font-size: 19px;
+  }
+
+  .camera-btn {
+    top: 7px;
+    right: 50px;
+    width: 34px;
+    height: 34px;
+    font-size: 16px;
   }
 }
 

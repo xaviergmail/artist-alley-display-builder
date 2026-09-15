@@ -402,7 +402,7 @@ function refresh(): void {
   renderFrame();
 }
 
-function placePanelAt(p: Placement, typeId: string = world.activeTypeId): void {
+function placePanelAt(p: Placement, typeId: string = world.activeTypeId, deferCommit = false): void {
   if (!world.canPlace(p)) return;
   const panel = world.place(p, typeId);
   if (buildMode === 'quick') {
@@ -417,7 +417,9 @@ function placePanelAt(p: Placement, typeId: string = world.activeTypeId): void {
     refresh();
     showNormalCandidates(candidatesForPanel(p));
   }
-  commitHistory();
+  // Paint strokes defer their history entry so one drag = one undo step;
+  // the session commits once on pointer-up.
+  if (!deferCommit) commitHistory();
 }
 
 // ---------------------------------------------------------------- undo
@@ -438,7 +440,7 @@ function commitHistory(): void {
 }
 
 function restoreHistoryEntry(): void {
-  sceneCtx.setTableLength(world.tableLength);
+  sceneCtx.setTableLength(world.tableLength, false);
   clearHover();
   clearNormalCandidates();
   refresh();
@@ -741,6 +743,10 @@ const ui = new UI(sidebar, viewport, {
   onUndo: undoHistory,
   onRedo: redoHistory,
   onTypePointerDown: startTypeDrag,
+  onResetView: () => {
+    sceneCtx.resetView();
+    renderFrame();
+  },
 });
 sceneCtx.setPlacementMode(buildMode);
 ui.setQuickMode(buildMode === 'quick', false);
@@ -754,6 +760,58 @@ window.addEventListener('popstate', () => {
 });
 
 // ---------------------------------------------------------------- events
+
+// Continuous placement: a mouse press that starts on a legal placement
+// target (candidate marker, edge ghost, or open table square) becomes a
+// paint session — the drag places every new legal square the cursor
+// crosses, and the whole stroke lands as ONE history entry. Presses that
+// start on empty space keep the left-drag camera orbit.
+let paintSession: { lastKey: string; placed: number } | null = null;
+
+function paintTarget(clientX: number, clientY: number): Placement | null {
+  if (buildMode === 'quick') {
+    updateHover(clientX, clientY);
+    return ghostPlacement && !ghostInvalid ? ghostPlacement : null;
+  }
+  setNdc(clientX, clientY);
+  raycaster.setFromCamera(ndc, sceneCtx.camera);
+  const markerCandidate = normalCandidates.get(pickCandidate() ?? '');
+  if (markerCandidate) return markerCandidate.placement;
+  updateNormalHover(clientX, clientY);
+  return ghostPlacement ? ghostPlacement : null;
+}
+
+function paintStep(clientX: number, clientY: number): void {
+  if (!paintSession) return;
+  const placement = paintTarget(clientX, clientY);
+  if (!placement) return;
+  const key = panelKey(placement);
+  if (key === paintSession.lastKey || !world.canPlace(placement)) return;
+  paintSession.lastKey = key;
+  paintSession.placed += 1;
+  placePanelAt(placement, world.activeTypeId, true);
+}
+
+function endPaintSession(): void {
+  if (!paintSession) return;
+  if (paintSession.placed > 0) {
+    commitHistory();
+    ui.setHistoryState(historyPointer > 0, historyPointer < assemblyHistory.length - 1);
+  }
+  paintSession = null;
+  sceneCtx.controls.enabled = true;
+}
+
+viewport.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 || e.pointerType !== 'mouse' || typeDrag) return;
+  const target = paintTarget(e.clientX, e.clientY);
+  if (target && world.canPlace(target)) {
+    // Steal the gesture from OrbitControls before its pointerdown runs.
+    sceneCtx.controls.enabled = false;
+    paintSession = { lastKey: panelKey(target), placed: 1 };
+    placePanelAt(target, world.activeTypeId, true);
+  }
+}, { capture: true });
 
 canvas.addEventListener('pointerdown', (e) => {
   sceneCtx.controls.rotateSpeed = e.pointerType === 'touch' ? 0.5 : 1;
@@ -783,7 +841,11 @@ canvas.addEventListener('pointermove', (e) => {
     const slop = e.pointerType === 'mouse' ? 5 : 10;
     if (Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) >= slop) {
       pointer.moved = true;
-      clearHover();
+      if (!paintSession) clearHover();
+    }
+    if (paintSession) {
+      if (pointer.moved && !camDragging && !touchGesture) paintStep(e.clientX, e.clientY);
+      return;
     }
     if (pointer.moved) return;
   }
@@ -795,6 +857,10 @@ canvas.addEventListener('pointermove', (e) => {
 canvas.addEventListener('pointerup', (e) => {
   const pointer = activePointers.get(e.pointerId);
   activePointers.delete(e.pointerId);
+  // Capture before endPaintSession(): a press that started a paint session
+  // already placed on pointer-down, so its tap must not place again.
+  const wasPainting = e.button === 0 && !!paintSession;
+  if (wasPainting) endPaintSession();
   if (e.button === 2) {
     const panelKeyHit = rightDown && Math.hypot(e.clientX - rightDown.x, e.clientY - rightDown.y) < 5 ? rightDown.panelKey : null;
     rightDown = null;
@@ -813,7 +879,7 @@ canvas.addEventListener('pointerup', (e) => {
     camDragging = false;
     canvas.style.cursor = 'default';
     if (buildMode === 'quick') updateHover(e.clientX, e.clientY);
-  } else if (e.button === 0 && pointer && !pointer.moved && !camDragging && !touchGesture) {
+  } else if (e.button === 0 && pointer && !pointer.moved && !camDragging && !touchGesture && !wasPainting) {
     if (buildMode === 'quick') handleClick();
     else handleNormalTap(e.clientX, e.clientY);
   }
@@ -831,9 +897,11 @@ function cancelPointer(e: PointerEvent): void {
   // A cancellation terminates the current gesture. Only an outstanding
   // companion pointer keeps the multi-touch tap guard alive.
   touchGesture = activePointers.size > 0;
+  endPaintSession();
   clearHover();
   renderFrame();
 }
+
 canvas.addEventListener('pointercancel', cancelPointer);
 canvas.addEventListener('lostpointercapture', cancelPointer);
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());

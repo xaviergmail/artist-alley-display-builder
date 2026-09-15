@@ -399,7 +399,7 @@ export class SceneCtx {
   readonly markerGroup = new THREE.Group();
   readonly connectorGroup = new THREE.Group();
   tableTop: THREE.Mesh | null = null;
-  private tableLength = 72;
+  private tableLength = 0;
   private panelMeshes = new Map<string, THREE.Object3D>();
   private connectorBatch: THREE.InstancedMesh | null = null;
   private ghostConnectorBatch: THREE.InstancedMesh | null = null;
@@ -467,7 +467,7 @@ export class SceneCtx {
     this.controls.maxPolarAngle = Math.PI / 2;
     this.controls.minDistance = 20;
     this.controls.maxDistance = 800;
-    this.setTableLength(this.tableLength);
+    this.setTableLength(72);
   }
 
   panelMesh(key: string): THREE.Object3D | undefined {
@@ -475,8 +475,9 @@ export class SceneCtx {
   }
 
   setPlacementMode(_mode: 'normal' | 'quick'): void {
-    // Left-drag orbits in both modes; quick mode places on stationary
-    // left-clicks (drag-vs-click is disambiguated by movement threshold).
+    // Left-drag orbits in both modes — except when a press starts on a
+    // legal placement target, which main.ts steals for continuous
+    // placement (paint) by disabling controls for that gesture.
     this.controls.mouseButtons = {
       LEFT: THREE.MOUSE.ROTATE,
       MIDDLE: THREE.MOUSE.PAN,
@@ -484,35 +485,45 @@ export class SceneCtx {
     } as unknown as typeof this.controls.mouseButtons;
   }
 
-  setTableLength(len: number): void {
+  setTableLength(len: number, reframe = true): void {
+    const rebuild = len !== this.tableLength;
     this.tableLength = len;
-    clearGroup(this.tableGroup);
-    const wood = new THREE.MeshStandardMaterial({ color: 0x8a5a33, roughness: 0.8 });
-    const top = new THREE.Mesh(new THREE.BoxGeometry(len, TABLE_TOP_T, TABLE_DEPTH), wood);
-    top.position.set(len / 2, -TABLE_TOP_T / 2, 0);
-    top.castShadow = true;
-    top.receiveShadow = true;
-    this.tableGroup.add(top);
-    this.tableTop = top;
-    const legGeom = new THREE.BoxGeometry(2.4, 28.5, 2.4);
-    for (const x of [2.5, len - 2.5]) {
-      for (const z of [-(TABLE_DEPTH / 2 - 1.6), TABLE_DEPTH / 2 - 1.6]) {
-        const leg = new THREE.Mesh(legGeom, wood);
-        leg.position.set(x, FLOOR_Y + 28.5 / 2, z);
-        leg.castShadow = true;
-        this.tableGroup.add(leg);
+    if (rebuild) {
+      clearGroup(this.tableGroup);
+      const wood = new THREE.MeshStandardMaterial({ color: 0x8a5a33, roughness: 0.8 });
+      const top = new THREE.Mesh(new THREE.BoxGeometry(len, TABLE_TOP_T, TABLE_DEPTH), wood);
+      top.position.set(len / 2, -TABLE_TOP_T / 2, 0);
+      top.castShadow = true;
+      top.receiveShadow = true;
+      this.tableGroup.add(top);
+      this.tableTop = top;
+      const legGeom = new THREE.BoxGeometry(2.4, 28.5, 2.4);
+      for (const x of [2.5, len - 2.5]) {
+        for (const z of [-(TABLE_DEPTH / 2 - 1.6), TABLE_DEPTH / 2 - 1.6]) {
+          const leg = new THREE.Mesh(legGeom, wood);
+          leg.position.set(x, FLOOR_Y + 28.5 / 2, z);
+          leg.castShadow = true;
+          this.tableGroup.add(leg);
+        }
       }
+      const ao = new THREE.Mesh(
+        new THREE.PlaneGeometry(len + 52, TABLE_DEPTH + 52),
+        new THREE.MeshBasicMaterial({ map: CONTACT_OCCLUSION, transparent: true, depthWrite: false }),
+      );
+      ao.rotation.x = -Math.PI / 2;
+      ao.position.set(len / 2, FLOOR_Y + 0.04, 0);
+      this.tableGroup.add(ao);
+      this.addChair(len);
     }
-    const ao = new THREE.Mesh(
-      new THREE.PlaneGeometry(len + 52, TABLE_DEPTH + 52),
-      new THREE.MeshBasicMaterial({ map: CONTACT_OCCLUSION, transparent: true, depthWrite: false }),
-    );
-    ao.rotation.x = -Math.PI / 2;
-    ao.position.set(len / 2, FLOOR_Y + 0.04, 0);
-    this.tableGroup.add(ao);
-    this.addChair(len);
-    this.controls.target.set(len / 2, 12, 0);
-    this.camera.position.set(len / 2 + 70, 65, 110);
+    if (reframe) {
+      this.controls.target.set(len / 2, 12, 0);
+      this.camera.position.set(len / 2 + 70, 65, 110);
+    }
+  }
+
+  resetView(): void {
+    this.controls.target.set(this.tableLength / 2, 12, 0);
+    this.camera.position.set(this.tableLength / 2 + 70, 65, 110);
   }
 
   private addChair(tableLength: number): void {
