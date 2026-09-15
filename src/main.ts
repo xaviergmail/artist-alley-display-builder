@@ -66,11 +66,33 @@ canvas.style.touchAction = 'none';
 
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
+// The portrait-phone layout rotates #app 90° clockwise (style.css). Pointer
+// events report screen coordinates, so map them through the inverse rotation
+// into the canvas's local space before any NDC or pixel math.
+function forcedLandscape(): boolean {
+  return window.matchMedia('(max-width: 767px) and (orientation: portrait) and (pointer: coarse)').matches;
+}
+
+function canvasPoint(clientX: number, clientY: number, rect: DOMRect): { x: number; y: number } {
+  let x = clientX - rect.left;
+  let y = clientY - rect.top;
+  if (forcedLandscape()) {
+    const sx = x;
+    x = y;
+    y = rect.width - sx;
+  }
+  return { x, y };
+}
 
 function setNdc(clientX: number, clientY: number): void {
   const rect = canvas.getBoundingClientRect();
-  ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-  ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  const pt = canvasPoint(clientX, clientY, rect);
+  // Under rotation the canvas's local width/height swap, which also swaps
+  // the screen-space AABB's height/width.
+  const w = forcedLandscape() ? rect.height : rect.width;
+  const h = forcedLandscape() ? rect.width : rect.height;
+  ndc.x = (pt.x / w) * 2 - 1;
+  ndc.y = -(pt.y / h) * 2 + 1;
 }
 
 function firstHit(objects: THREE.Object3D[]): THREE.Intersection | null {
@@ -121,7 +143,7 @@ let camDragging = false;
 let rightDown: { panelKey: string | null; x: number; y: number } | null = null;
 let lastMouse: { x: number; y: number } = { x: 0, y: 0 };
 let touchGesture = false;
-const activePointers = new Map<number, { x: number; y: number; moved: boolean; type: string }>();
+const activePointers = new Map<number, { x: number; y: number; cx: number; cy: number; moved: boolean; type: string }>();
 interface NormalCandidate {
   placement: Placement;
 }
@@ -359,9 +381,9 @@ function updateHover(clientX: number, clientY: number): void {
   const picked = pick();
   // Edge math works in container-relative pixels (same frame as
   // projectToScreen), so convert the page-space mouse once here.
-  const rect = canvas.getBoundingClientRect();
-  const mx = clientX - rect.left;
-  const my = clientY - rect.top;
+  const pt = canvasPoint(clientX, clientY, canvas.getBoundingClientRect());
+  const mx = pt.x;
+  const my = pt.y;
   hoverPanelKey = picked.panelKeyHit;
   if (picked.panelKeyHit) {
     const panel = world.panel(picked.panelKeyHit);
@@ -437,6 +459,9 @@ function commitHistory(): void {
   assemblyHistory.push(world.toJSON());
   if (assemblyHistory.length > HISTORY_LIMIT) assemblyHistory.shift();
   historyPointer = assemblyHistory.length - 1;
+  // Sync the footer buttons here: mutators tend to refresh() before they
+  // commit, and the button state must reflect the new pointer.
+  ui.setHistoryState(historyPointer > 0, historyPointer < assemblyHistory.length - 1);
 }
 
 function restoreHistoryEntry(): void {
@@ -623,14 +648,18 @@ function logRejectedGhostClick(placement: Placement): void {
 }
 
 function handleClick(): void {
-  if (ghostPlacement) {
-    if (ghostInvalid) logRejectedGhostClick(ghostPlacement);
-    else placePanelAt(ghostPlacement);
-    return;
-  }
+  // A tap landing on a placed panel selects it, even when an edge ghost is
+  // pending: the capture path would have started a paint session for any
+  // placeable ghost, so a ghost that survives to the tap is either invalid
+  // or unreachable — the user's click is on the panel.
   if (hoverPanelKey) {
     world.selectedKey = world.selectedKey === hoverPanelKey ? null : hoverPanelKey;
     refresh();
+    return;
+  }
+  if (ghostPlacement) {
+    if (ghostInvalid) logRejectedGhostClick(ghostPlacement);
+    else placePanelAt(ghostPlacement);
     return;
   }
   if (world.selectedKey) {
@@ -796,26 +825,105 @@ function endPaintSession(): void {
   if (!paintSession) return;
   if (paintSession.placed > 0) {
     commitHistory();
-    ui.setHistoryState(historyPointer > 0, historyPointer < assemblyHistory.length - 1);
   }
   paintSession = null;
   sceneCtx.controls.enabled = true;
 }
 
 viewport.addEventListener('pointerdown', (e) => {
-  if (e.button !== 0 || e.pointerType !== 'mouse' || typeDrag) return;
-  const target = paintTarget(e.clientX, e.clientY);
-  if (target && world.canPlace(target)) {
-    // Steal the gesture from OrbitControls before its pointerdown runs.
+  if (e.button !== 0 || typeDrag) return;
+  if (e.pointerType === 'mouse') {
+    const target = paintTarget(e.clientX, e.clientY);
+    if (target && world.canPlace(target)) {
+      // Steal the gesture from OrbitControls before its pointerdown runs.
+      sceneCtx.controls.enabled = false;
+      paintSession = { lastKey: panelKey(target), placed: 1 };
+      placePanelAt(target, world.activeTypeId, true);
+    }
+    return;
+  }
+  // Rotated touch: OrbitControls' rotate math assumes an unrotated canvas,
+  // so we drive orbit and pinch zoom ourselves while the layout is forced
+  // landscape (main.ts forcedLandscape()).
+  if (e.pointerType === 'touch' && forcedLandscape()) {
     sceneCtx.controls.enabled = false;
-    paintSession = { lastKey: panelKey(target), placed: 1 };
-    placePanelAt(target, world.activeTypeId, true);
   }
 }, { capture: true });
 
+// Rotated-mode camera control. Deltas are measured in screen pixels and
+// mapped through the inverse of the +90° layout rotation: local dx = dy,
+// local dy = -dx. Sensitivity matches OrbitControls' 2π-per-height sweep.
+let pinchDist = 0;
+
+function rotatedOrbit(dScreenX: number, dScreenY: number): void {
+  const dLocalX = dScreenY;
+  const dLocalY = -dScreenX;
+  const camera = sceneCtx.camera;
+  const target = sceneCtx.controls.target;
+  const offset = camera.position.clone().sub(target);
+  const spherical = new THREE.Spherical().setFromVector3(offset);
+  const speed = 2 * Math.PI * sceneCtx.controls.rotateSpeed / canvas.clientHeight;
+  spherical.theta -= speed * dLocalX;
+  spherical.phi -= speed * dLocalY;
+  spherical.phi = Math.max(0.05, Math.min(Math.PI / 2 - 0.05, spherical.phi));
+  camera.position.copy(target).add(new THREE.Vector3().setFromSpherical(spherical));
+  camera.lookAt(target);
+  renderFrame();
+}
+
+function rotatedPinch(): void {
+  const points = [...activePointers.values()];
+  if (points.length !== 2) return;
+  const dist = Math.hypot(points[0].cx - points[1].cx, points[0].cy - points[1].cy);
+  if (pinchDist > 0 && dist > 0) {
+    const camera = sceneCtx.camera;
+    const target = sceneCtx.controls.target;
+    const offset = camera.position.clone().sub(target);
+    const len = Math.max(20, Math.min(790, offset.length() * pinchDist / dist));
+    offset.setLength(len);
+    camera.position.copy(target).add(offset);
+    renderFrame();
+  }
+  pinchDist = dist;
+}
+
+canvas.addEventListener('pointermove', (e) => {
+  lastMouse = { x: e.clientX, y: e.clientY };
+  if (typeDrag) return;
+  const pointer = activePointers.get(e.pointerId);
+  if (pointer) {
+    const slop = e.pointerType === 'mouse' ? 5 : 10;
+    if (Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) >= slop) {
+      pointer.moved = true;
+      if (!paintSession) clearHover();
+    }
+    if (paintSession) {
+      if (pointer.moved && !camDragging && !touchGesture) paintStep(e.clientX, e.clientY);
+      pointer.cx = e.clientX;
+      pointer.cy = e.clientY;
+      return;
+    }
+    if (forcedLandscape() && e.pointerType === 'touch') {
+      const dScreenX = e.clientX - pointer.cx;
+      const dScreenY = e.clientY - pointer.cy;
+      pointer.cx = e.clientX;
+      pointer.cy = e.clientY;
+      if (pointer.moved) {
+        if (activePointers.size === 1) rotatedOrbit(dScreenX, dScreenY);
+        else rotatedPinch();
+      }
+      return;
+    }
+    if (pointer.moved) return;
+  }
+  if (e.pointerType !== 'mouse' || camDragging) return;
+  if (buildMode === 'quick') updateHover(e.clientX, e.clientY);
+  else updateNormalHover(e.clientX, e.clientY);
+});
+
 canvas.addEventListener('pointerdown', (e) => {
   sceneCtx.controls.rotateSpeed = e.pointerType === 'touch' ? 0.5 : 1;
-  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY, moved: false, type: e.pointerType });
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY, cx: e.clientX, cy: e.clientY, moved: false, type: e.pointerType });
   if (e.pointerType === 'touch' && [...activePointers.values()].filter((pointer) => pointer.type === 'touch').length > 1) touchGesture = true;
   if (e.button === 2) {
     setNdc(e.clientX, e.clientY);
@@ -833,26 +941,6 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 });
 
-canvas.addEventListener('pointermove', (e) => {
-  lastMouse = { x: e.clientX, y: e.clientY };
-  if (typeDrag) return;
-  const pointer = activePointers.get(e.pointerId);
-  if (pointer) {
-    const slop = e.pointerType === 'mouse' ? 5 : 10;
-    if (Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) >= slop) {
-      pointer.moved = true;
-      if (!paintSession) clearHover();
-    }
-    if (paintSession) {
-      if (pointer.moved && !camDragging && !touchGesture) paintStep(e.clientX, e.clientY);
-      return;
-    }
-    if (pointer.moved) return;
-  }
-  if (e.pointerType !== 'mouse' || camDragging) return;
-  if (buildMode === 'quick') updateHover(e.clientX, e.clientY);
-  else updateNormalHover(e.clientX, e.clientY);
-});
 
 canvas.addEventListener('pointerup', (e) => {
   const pointer = activePointers.get(e.pointerId);
@@ -880,12 +968,22 @@ canvas.addEventListener('pointerup', (e) => {
     canvas.style.cursor = 'default';
     if (buildMode === 'quick') updateHover(e.clientX, e.clientY);
   } else if (e.button === 0 && pointer && !pointer.moved && !camDragging && !touchGesture && !wasPainting) {
-    if (buildMode === 'quick') handleClick();
-    else handleNormalTap(e.clientX, e.clientY);
+    if (buildMode === 'quick') {
+      // Touch taps carry no preceding pointermove, so quick mode has no
+      // hover state yet — derive it from the tap point first.
+      if (e.pointerType === 'touch') updateHover(e.clientX, e.clientY);
+      handleClick();
+    } else {
+      handleNormalTap(e.clientX, e.clientY);
+    }
   }
   if (activePointers.size === 0) {
     camDragging = false;
     touchGesture = false;
+    // Re-enable OrbitControls after any gesture that disabled it (paint
+    // sessions, rotated-mode touch camera control).
+    sceneCtx.controls.enabled = true;
+    pinchDist = 0;
   }
 });
 
@@ -909,12 +1007,17 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 // Wheel zoom is camera interaction too: drop only the transient quick ghost.
 canvas.addEventListener('wheel', () => { clearHover(); renderFrame(); }, { passive: true });
 
-window.addEventListener('resize', () => {
+const resize3D = (): void => {
   sceneCtx.camera.aspect = viewport.clientWidth / viewport.clientHeight;
   sceneCtx.camera.updateProjectionMatrix();
   sceneCtx.renderer.setSize(viewport.clientWidth, viewport.clientHeight);
   renderFrame();
-});
+};
+window.addEventListener('resize', resize3D);
+// The portrait layout rotates #app via CSS, which changes the viewport's
+// local box without a window resize event — observe the box directly so the
+// renderer always matches the rotated canvas size.
+new ResizeObserver(resize3D).observe(viewport);
 
 // ---------------------------------------------------------------- drag-to-place
 
